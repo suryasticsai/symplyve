@@ -1,6 +1,6 @@
 const { createApp } = Vue;
 
-// 1. INTERCEPT CONSOLE LOGS FOR DEBUG UI
+// Intercept console logs for the Debug Console UI
 const originalLog = console.log;
 const originalError = console.error;
 let vueAppInstance = null;
@@ -19,11 +19,10 @@ window.addEventListener('error', function(event) {
     if (vueAppInstance) vueAppInstance.addDebugLog('error', `${event.message} at ${event.filename}:${event.lineno}`);
 });
 
-// 2. MOUNT VUE APP
 const app = createApp({
     data() {
         return {
-            activeTab: 'calendar',
+            activeTab: 'welcome', // Default to welcome tab
             showDebug: false,
             debugLogs: [],
             ...notificationModule.data(),
@@ -42,7 +41,6 @@ const app = createApp({
         ...calendarModule.methods,
         ...leaveModule.methods,
         
-        // DEBUG CONSOLE METHODS
         toggleDebug() {
             this.showDebug = !this.showDebug;
         },
