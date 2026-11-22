@@ -20,7 +20,7 @@
 <div id="app" class="d-flex flex-column min-vh-100">
   <!-- ===== HEADER ===== -->
   <header class="top-header">
-    <a href="#" class="brand">
+    <a href="#" class="brand" @click.prevent="activeTab = 'welcome'">
       <img src="simplyve-logo.png" alt="Symplyve" style="max-height: 36px; width: auto; object-fit: contain;" onerror="this.style.display='none'">
       <span class="brand-name">Symplyve</span>
     </a>
@@ -33,7 +33,7 @@
         <i class="bi bi-bell fs-5"></i>
         <span class="notif-dot" v-if="unreadNotifications > 0"></span>
       </button>
-      <div class="user-chip d-none d-sm-flex">
+      <div class="user-chip d-none d-sm-flex" @click="openProfile(employees[0])" style="cursor: pointer;">
         <div class="user-avatar">RS</div>
         <span style="font-weight:600;font-size:0.875rem;">Rachel S.</span>
       </div>
@@ -46,6 +46,7 @@
 
   <!-- ===== NAV ===== -->
   <nav class="main-nav">
+    <a href="#" class="nav-link" :class="{ active: activeTab === 'welcome' }" @click.prevent="activeTab = 'welcome'">Welcome</a>
     <a href="#" class="nav-link" :class="{ active: activeTab === 'calendar' }" @click.prevent="activeTab = 'calendar'">Team Calendar</a>
     <a href="#" class="nav-link" :class="{ active: activeTab === 'myleave' }" @click.prevent="activeTab = 'myleave'">My Leave</a>
     <a href="#" class="nav-link" :class="{ active: activeTab === 'approvals' }" @click.prevent="activeTab = 'approvals'">
@@ -62,27 +63,121 @@
     </div>
 
     <div v-else>
-      <!-- STATS ROW -->
-      <div class="stats-row mb-4">
-        <div class="stat-card">
-          <div class="stat-icon blue"><i class="bi bi-people-fill"></i></div>
-          <div class="stat-info"><h3>{{ employees.length }}</h3><p>Team Members</p></div>
+      <!-- ========================================== -->
+      <!-- VIEW: WELCOME -->
+      <!-- ========================================== -->
+      <div v-show="activeTab === 'welcome'" class="welcome-container text-center py-4">
+        <h1 class="fw-bold mb-3" style="font-family: 'Outfit';">Welcome to <span class="text-primary">Symplyve</span></h1>
+        <p class="text-muted mb-5" style="max-width: 600px; margin: 0 auto;">The elite leave management platform for high-performing teams. Easily track time off, manage approvals, and view team availability.</p>
+        
+        <div class="row g-4 justify-content-center mb-5">
+          <div class="col-md-4">
+            <div class="card h-100 p-4 border-0 shadow-sm feature-card" @click="activeTab = 'calendar'">
+              <i class="bi bi-calendar3 fs-1 text-primary mb-3"></i>
+              <h5 class="fw-bold">Team Calendar</h5>
+              <p class="text-muted small mb-0">View the Gantt timeline or monthly grid to see who is out.</p>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="card h-100 p-4 border-0 shadow-sm feature-card" @click="activeTab = 'myleave'">
+              <i class="bi bi-person-badge fs-1 text-primary mb-3"></i>
+              <h5 class="fw-bold">My Leave</h5>
+              <p class="text-muted small mb-0">Check your personal leave balance and past requests.</p>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="card h-100 p-4 border-0 shadow-sm feature-card" @click="openLeaveModal">
+              <i class="bi bi-send-plus fs-1 text-primary mb-3"></i>
+              <h5 class="fw-bold">Apply for Leave</h5>
+              <p class="text-muted small mb-0">Submit a new leave request in seconds.</p>
+            </div>
+          </div>
         </div>
-        <div class="stat-card">
-          <div class="stat-icon amber"><i class="bi bi-clock-history"></i></div>
-          <div class="stat-info"><h3>{{ pendingApprovalsCount }}</h3><p>Pending Requests</p></div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-icon red"><i class="bi bi-airplane"></i></div>
-          <div class="stat-info"><h3>{{ outTodayCount }}</h3><p>Out Today</p></div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-icon cyan"><i class="bi bi-graph-up-arrow"></i></div>
-          <div class="stat-info"><h3>68%</h3><p>Leave Utilization</p></div>
+
+        <div class="alert alert-primary d-inline-block shadow-sm" role="alert">
+          <i class="bi bi-lightbulb me-2"></i> <strong>Pro Tip:</strong> You can deep link to a specific user's profile by adding <code>?empId=EMP-001</code> to the URL.
         </div>
       </div>
 
-      <!-- VIEW: TEAM CALENDAR -->
+      <!-- ========================================== -->
+      <!-- VIEW: MY LEAVE -->
+      <!-- ========================================== -->
+      <div v-show="activeTab === 'myleave'">
+        <div class="card mb-4">
+          <div class="card-header bg-white d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+            <h5 class="m-0 text-primary"><i class="bi bi-person-badge me-2"></i>My Leave Dashboard</h5>
+            
+            <!-- Selector for My Leave -->
+            <div class="d-flex align-items-center gap-2">
+              <label class="fw-semibold small text-muted mb-0">Viewing:</label>
+              <select class="form-select form-select-sm fw-bold" v-model="targetEmployee" @change="updateURL()" style="width: auto; min-width: 200px;">
+                <option v-for="emp in employees" :key="emp.id" :value="emp">{{ emp.name }} ({{ emp.id }})</option>
+              </select>
+              <button class="btn btn-sm btn-outline-primary ms-2" @click="openProfile(targetEmployee)">View Profile</button>
+            </div>
+          </div>
+
+          <div class="row g-0" v-if="targetEmployee">
+            <!-- Left: Balance Stats -->
+            <div class="col-md-4 border-end p-4 text-center">
+              <div class="stat-icon blue mx-auto mb-3" style="width:64px;height:64px;font-size:2rem;"><i class="bi bi-person-badge-fill"></i></div>
+              <h4 class="fw-bold mb-1">{{ targetEmployee.name }}</h4>
+              <p class="text-muted small mb-4">{{ targetEmployee.role }} · {{ targetEmployee.department }}</p>
+              
+              <div class="d-flex justify-content-center gap-4">
+                <div class="text-center">
+                  <h3 class="fw-bold text-primary mb-0">{{ targetEmployee.totalAllowance || 24 }}</h3>
+                  <small class="text-muted fw-semibold">Total</small>
+                </div>
+                <div class="text-center">
+                  <h3 class="fw-bold text-warning mb-0">{{ calculateUsed(targetEmployee.name) }}</h3>
+                  <small class="text-muted fw-semibold">Used</small>
+                </div>
+                <div class="text-center">
+                  <h3 class="fw-bold text-success mb-0">{{ (targetEmployee.totalAllowance || 24) - calculateUsed(targetEmployee.name) }}</h3>
+                  <small class="text-muted fw-semibold">Left</small>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right: Leave History -->
+            <div class="col-md-8 p-4 bg-light" style="border-radius: 0 0 16px 0;">
+              <h6 class="fw-bold mb-3">Leave History</h6>
+              <div class="table-responsive">
+                <table class="table table-sm table-hover align-middle bg-white rounded shadow-sm">
+                  <thead class="table-light">
+                    <tr>
+                      <th>Type</th>
+                      <th>Dates</th>
+                      <th>Days</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="l in myLeaves" :key="l.id">
+                      <td><span class="badge" :class="l.typeClass">{{ l.label }}</span></td>
+                      <td class="small text-muted">{{ l.startDate }} to {{ l.endDate }}</td>
+                      <td class="fw-bold">{{ l.end - l.start + 1 }}</td>
+                      <td>
+                        <span class="status-pill" :class="l.status === 'Approved' ? 'status-in' : (l.status === 'Pending' ? 'bg-warning text-dark' : 'status-out')">
+                          {{ l.status }}
+                        </span>
+                      </td>
+                    </tr>
+                    <tr v-if="myLeaves.length === 0">
+                      <td colspan="4" class="text-center text-muted py-4">No leaves recorded for this employee.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ========================================== -->
+      <!-- VIEW: TEAM CALENDAR (Keep Existing) -->
+      <!-- ========================================== -->
       <div v-show="activeTab === 'calendar'" class="content-grid">
         <div class="card">
           <!-- TOOLBAR -->
@@ -125,7 +220,7 @@
             </div>
             <div id="grid-body">
                 <div class="grid-row" v-for="emp in filteredEmployees" :key="emp.id" :style="{ gridTemplateColumns: `220px repeat(${days.length}, minmax(40px, 1fr))` }">
-                    <div class="col-emp d-flex align-items-center">
+                    <div class="col-emp d-flex align-items-center" @click="openProfile(emp)" style="cursor:pointer;">
                         <div class="emp-avatar">{{ emp.name.substring(0,2).toUpperCase() }}</div>
                         <div style="overflow: hidden; text-overflow: ellipsis;">{{ emp.name }}</div>
                     </div>
@@ -137,7 +232,7 @@
             </div>
           </div>
 
-          <!-- LEGEND (Forced styles to prevent missing dots) -->
+          <!-- LEGEND -->
           <div class="legend d-flex flex-wrap gap-3 p-3 bg-light border-top">
             <div class="d-flex align-items-center gap-2 small fw-semibold text-muted"><div style="width:10px; height:10px; border-radius:3px; background:#3b82f6;"></div> Annual</div>
             <div class="d-flex align-items-center gap-2 small fw-semibold text-muted"><div style="width:10px; height:10px; border-radius:3px; background:#f59e0b;"></div> Sick</div>
@@ -170,7 +265,9 @@
         </div>
       </div>
 
-      <!-- VIEW: APPROVALS -->
+      <!-- ========================================== -->
+      <!-- VIEW: APPROVALS (Keep Existing) -->
+      <!-- ========================================== -->
       <div v-show="activeTab === 'approvals'" class="card">
         <div class="card-header d-flex justify-content-between align-items-center">
           <h5 class="m-0"><i class="bi bi-check2-square me-2 text-primary"></i>Pending Approvals</h5>
@@ -214,7 +311,9 @@
         </div>
       </div>
 
-      <!-- VIEW: REPORTS -->
+      <!-- ========================================== -->
+      <!-- VIEW: REPORTS (Keep Existing) -->
+      <!-- ========================================== -->
       <div v-show="activeTab === 'reports'" class="card">
         <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
           <h5 class="m-0"><i class="bi bi-file-earmark-bar-graph me-2 text-primary"></i>Leave Reports</h5>
@@ -278,29 +377,74 @@
     </div>
   </footer>
 
-  <!-- DEBUG CONSOLE -->
-  <div class="debug-console" :class="{ 'open': showDebug }">
-    <div class="debug-header">
-      <div class="d-flex align-items-center gap-2">
-        <i class="bi bi-terminal-fill text-primary"></i>
-        <strong>Debug Console</strong>
-        <span class="badge bg-secondary ms-2">{{ debugLogs.length }} logs</span>
+  <!-- ===== NOTIFICATIONS PANEL (Fixed Z-index) ===== -->
+  <div class="notification-overlay" v-if="showNotifications" @click="toggleNotifications"></div>
+  <div class="notification-panel" :class="{ 'show': showNotifications }">
+      <div class="notif-header">
+          <h5>Notifications</h5>
+          <button @click="toggleNotifications" class="btn-close-custom"><i class="bi bi-x-lg"></i></button>
       </div>
-      <div class="d-flex gap-2">
-        <button class="btn btn-sm btn-outline-light" @click="copyLogs"><i class="bi bi-clipboard"></i> Copy</button>
-        <button class="btn btn-sm btn-outline-danger" @click="clearLogs"><i class="bi bi-trash"></i> Clear</button>
-        <button class="btn btn-sm btn-outline-light" @click="toggleDebug"><i class="bi bi-x-lg"></i></button>
+      <div class="notif-body">
+          <div class="notif-item" v-for="notif in notifications" :key="notif.id" :class="{ unread: !notif.read }">
+              <div class="notif-icon" :class="notif.type"><i class="bi" :class="notif.icon"></i></div>
+              <div class="notif-content">
+                  <p>{{ notif.text }}</p>
+                  <small>{{ notif.time }}</small>
+              </div>
+          </div>
       </div>
-    </div>
-    <div class="debug-body" id="debugBody">
-      <div v-for="(log, i) in debugLogs" :key="i" class="log-line" :class="log.type">
-        <span class="log-time">[{{ log.time }}]</span>
-        <span class="log-msg">{{ log.message }}</span>
+  </div>
+
+  <!-- ===== PROFILE MODAL ===== -->
+  <div class="modal fade" id="profileModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content border-0 shadow-lg" style="border-radius: 20px; overflow: hidden;">
+        <div class="modal-header border-0 bg-primary text-white pb-4 pt-4" style="background: linear-gradient(135deg, #2563eb, #06b6d4) !important;">
+          <div class="w-100 text-center">
+            <div class="bg-white text-primary rounded-circle d-inline-flex justify-content-center align-items-center mb-3 shadow" style="width: 80px; height: 80px; font-size: 2rem; font-weight: bold;">
+              {{ profileEmployee ? profileEmployee.name.substring(0,2).toUpperCase() : '??' }}
+            </div>
+            <h3 class="fw-bold mb-1">{{ profileEmployee?.name }}</h3>
+            <p class="mb-0 opacity-75">{{ profileEmployee?.role }}</p>
+          </div>
+          <button type="button" class="btn-close btn-close-white position-absolute top-0 end-0 m-3" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body p-4">
+          <div class="row g-3">
+            <div class="col-6">
+              <small class="text-muted fw-bold">Employee ID</small>
+              <p class="fw-semibold mb-0">{{ profileEmployee?.id }}</p>
+            </div>
+            <div class="col-6">
+              <small class="text-muted fw-bold">Department</small>
+              <p class="fw-semibold mb-0">{{ profileEmployee?.department || 'General' }}</p>
+            </div>
+            <div class="col-12">
+              <small class="text-muted fw-bold">Email Address</small>
+              <p class="fw-semibold mb-0">{{ profileEmployee?.email || (profileEmployee?.name.toLowerCase().replace(' ', '') + '@symplyve.com') }}</p>
+            </div>
+            <div class="col-12 mt-4">
+              <div class="d-flex justify-content-between bg-light p-3 rounded">
+                <div class="text-center w-100 border-end">
+                  <h5 class="fw-bold text-primary mb-0">{{ profileEmployee?.totalAllowance || 24 }}</h5>
+                  <small class="text-muted fw-semibold">Total Allowance</small>
+                </div>
+                <div class="text-center w-100">
+                  <h5 class="fw-bold text-success mb-0">{{ (profileEmployee?.totalAllowance || 24) - calculateUsed(profileEmployee?.name) }}</h5>
+                  <small class="text-muted fw-semibold">Available</small>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer border-0 pt-0">
+          <button class="btn btn-light w-100 fw-bold" data-bs-dismiss="modal">Close Profile</button>
+        </div>
       </div>
     </div>
   </div>
 
-  <!-- MODALS & TOASTS (Same as before) -->
+  <!-- ===== APPLY LEAVE MODAL ===== -->
   <div class="modal fade" id="leaveModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-fullscreen-sm-down">
       <div class="modal-content">
@@ -363,22 +507,6 @@
     </div>
   </div>
 
-  <div class="notification-overlay" v-if="showNotifications" @click="toggleNotifications"></div>
-  <div class="notification-panel" :class="{ 'show': showNotifications }">
-      <div class="notif-header">
-          <h5>Notifications</h5>
-          <button @click="toggleNotifications" class="btn-close-custom"><i class="bi bi-x-lg"></i></button>
-      </div>
-      <div class="notif-body">
-          <div class="notif-item" v-for="notif in notifications" :key="notif.id" :class="{ unread: !notif.read }">
-              <div class="notif-icon" :class="notif.type"><i class="bi" :class="notif.icon"></i></div>
-              <div class="notif-content">
-                  <p>{{ notif.text }}</p>
-                  <small>{{ notif.time }}</small>
-              </div>
-          </div>
-      </div>
-  </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
