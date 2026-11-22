@@ -17,10 +17,15 @@ const calendarModule = {
             selectedYear: new Date().getFullYear().toString(),
 
             outTodayList: [],
-            pendingRequests: []
+            pendingRequests: [],
+            
+            currentUser: null
         }
     },
     computed: {
+        isAdmin() {
+            return !this.currentUser || this.currentUser.id === 'ADMIN';
+        },
         filteredEmployees() {
             if (!this.searchQuery) return this.employees;
             const q = this.searchQuery.toLowerCase();
@@ -53,11 +58,11 @@ const calendarModule = {
                 const empData = await empRes.json();
                 const leaveData = await leaveRes.json();
 
-                // Map all fields properly
                 this.employees = Array.isArray(empData) ? empData.map(e => ({ 
                     id: e.ID, name: e.Name, role: e.Role,
                     department: e.Department, email: e.Email,
-                    totalAllowance: e.TotalAllowance, usedAllowance: e.UsedAllowance
+                    totalAllowance: e.TotalAllowance, usedAllowance: e.UsedAllowance,
+                    hasPassword: e.hasPassword
                 })) : [];
                 
                 const typeMap = {
@@ -78,26 +83,30 @@ const calendarModule = {
                         id: row.ID, emp: row.EmployeeName, start: startDay, end: endDay, 
                         startDate: row.StartDate, endDate: row.EndDate,
                         typeClass: typeInfo.class, fcClass: typeInfo.fcClass,
-                        label: typeInfo.label, status: row.Status 
+                        label: typeInfo.label, status: row.Status,
+                        reason: row.Reason || '',
+                        adminComment: row.AdminComment || ''
                     };
                 }).filter(Boolean) : [];
 
                 this.generateDays(); 
                 this.processSidePanels();
                 
-                // URL Parsing Logic
                 const urlParams = new URLSearchParams(window.location.search);
                 const empIdParam = urlParams.get('empId');
                 
                 if (empIdParam) {
                     const foundEmp = this.employees.find(e => e.id === empIdParam);
                     if (foundEmp) {
+                        this.currentUser = foundEmp;
                         this.targetEmployee = foundEmp;
                         this.activeTab = 'myleave';
                     } else {
-                        this.targetEmployee = this.employees[0]; // fallback
+                        this.currentUser = { id: 'ADMIN', name: 'Admin' };
+                        this.targetEmployee = this.employees[0];
                     }
                 } else {
+                    this.currentUser = { id: 'ADMIN', name: 'Admin' };
                     this.targetEmployee = this.employees[0];
                 }
                 
@@ -145,7 +154,12 @@ const calendarModule = {
 
             this.pendingRequests = this.leaves
                 .filter(l => l.status === 'Pending')
-                .map(l => ({ id: l.id, emp: l.emp, label: `${l.label} (${l.startDate} to ${l.endDate})` }));
+                .map(l => ({ 
+                    id: l.id, 
+                    emp: l.emp, 
+                    label: `${l.label} (${l.startDate} to ${l.endDate})`,
+                    reason: l.reason
+                }));
         },
         renderFullCalendar() {
             const calendarEl = this.$refs.calendarEl;
@@ -171,7 +185,14 @@ const calendarModule = {
                         headerToolbar: { left: 'prev,next', center: 'title', right: '' },
                         height: '100%',
                         events: events,
-                        dayMaxEvents: 3
+                        dayMaxEvents: 3,
+                        dateClick: (info) => {
+                            // Additional Feature: Click to apply
+                            this.newLeave.startDate = info.dateStr;
+                            this.newLeave.endDate = info.dateStr;
+                            this.selectedEmployee = this.isAdmin ? this.employees[0] : this.currentUser;
+                            this.openLeaveModal();
+                        }
                     });
                     this.fcCalendar.render();
                 }
