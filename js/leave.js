@@ -2,12 +2,26 @@ const leaveModule = {
     data() {
         return {
             selectedEmployee: null,
+            targetEmployee: null, // Used for My Leave tab
+            profileEmployee: null, // Used for Profile Modal
             newLeave: { type: 'annual', startDate: '', endDate: '', reason: '' },
             isSubmitting: false,
             toasts: [] 
         }
     },
+    computed: {
+        myLeaves() {
+            if (!this.targetEmployee) return [];
+            return this.leaves.filter(l => l.emp === this.targetEmployee.name);
+        }
+    },
     methods: {
+        calculateUsed(empName) {
+            if (!empName) return 0;
+            return this.leaves
+                .filter(l => l.emp === empName && l.status === 'Approved')
+                .reduce((sum, l) => sum + (l.end - l.start + 1), 0);
+        },
         openLeaveModal() {
             if (!this.selectedEmployee && this.employees.length > 0) {
                 this.selectedEmployee = this.employees[0];
@@ -15,6 +29,18 @@ const leaveModule = {
             this.newLeave = { type: 'annual', startDate: '', endDate: '', reason: '' };
             this.isSubmitting = false;
             new bootstrap.Modal(document.getElementById('leaveModal')).show();
+        },
+        openProfile(emp) {
+            if (!emp) return;
+            this.profileEmployee = emp;
+            new bootstrap.Modal(document.getElementById('profileModal')).show();
+        },
+        updateURL() {
+            if (this.targetEmployee) {
+                const url = new URL(window.location);
+                url.searchParams.set('empId', this.targetEmployee.id);
+                window.history.pushState({}, '', url);
+            }
         },
         async submitLeave() {
             if (!this.selectedEmployee) return;
@@ -50,6 +76,14 @@ const leaveModule = {
             const id = Date.now();
             this.toasts.push({ id, message: msg, type });
             setTimeout(() => this.toasts = this.toasts.filter(t => t.id !== id), 4000);
+        },
+        approveLeave(id) {
+            this.pendingRequests = this.pendingRequests.filter(r => r.id !== id);
+            this.showToast("Leave approved successfully.", "success");
+        },
+        rejectLeave(id) {
+            this.pendingRequests = this.pendingRequests.filter(r => r.id !== id);
+            this.showToast("Leave rejected.", "error");
         }
     }
 };
