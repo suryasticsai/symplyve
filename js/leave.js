@@ -2,11 +2,19 @@ const leaveModule = {
     data() {
         return {
             selectedEmployee: null,
-            targetEmployee: null, // Used for My Leave tab
-            profileEmployee: null, // Used for Profile Modal
+            targetEmployee: null, 
+            profileEmployee: null, 
             newLeave: { type: 'annual', startDate: '', endDate: '', reason: '' },
             isSubmitting: false,
-            toasts: [] 
+            toasts: [], 
+            
+            reviewingLeave: null,
+            adminComment: '',
+            otpInput: '',
+            currentApproveId: null,
+            reviewModalObj: null,
+            otpModalObj: null,
+            profileModalObj: null
         }
     },
     computed: {
@@ -24,7 +32,8 @@ const leaveModule = {
         },
         openLeaveModal() {
             if (!this.selectedEmployee && this.employees.length > 0) {
-                this.selectedEmployee = this.employees[0];
+                // If employee is logged in, lock to their profile. If admin, default to first.
+                this.selectedEmployee = this.isAdmin ? this.employees[0] : this.currentUser;
             }
             this.newLeave = { type: 'annual', startDate: '', endDate: '', reason: '' };
             this.isSubmitting = false;
@@ -33,7 +42,10 @@ const leaveModule = {
         openProfile(emp) {
             if (!emp) return;
             this.profileEmployee = emp;
-            new bootstrap.Modal(document.getElementById('profileModal')).show();
+            if(!this.profileModalObj) {
+                this.profileModalObj = new bootstrap.Modal(document.getElementById('profileModal'));
+            }
+            this.profileModalObj.show();
         },
         updateURL() {
             if (this.targetEmployee) {
@@ -77,13 +89,81 @@ const leaveModule = {
             this.toasts.push({ id, message: msg, type });
             setTimeout(() => this.toasts = this.toasts.filter(t => t.id !== id), 4000);
         },
-        approveLeave(id) {
-            this.pendingRequests = this.pendingRequests.filter(r => r.id !== id);
-            this.showToast("Leave approved successfully.", "success");
+        
+        // --- ADMIN REVIEW FLOWS ---
+        openReviewModal(req) {
+            this.reviewingLeave = req;
+            this.adminComment = '';
+            
+            if(!this.reviewModalObj) {
+                this.reviewModalObj = new bootstrap.Modal(document.getElementById('reviewModal'));
+            }
+            this.reviewModalObj.show();
         },
-        rejectLeave(id) {
-            this.pendingRequests = this.pendingRequests.filter(r => r.id !== id);
-            this.showToast("Leave rejected.", "error");
+
+        async handleReject() {
+            this.isSubmitting = true;
+            try {
+                const payload = { id: this.reviewingLeave.id, status: 'Rejected', comment: this.adminComment };
+                await this.updateLeaveStatus(payload);
+                
+                this.reviewModalObj.hide();
+                await this.loadData();
+                this.showToast("Leave rejected and email sent.", "error");
+            } catch(e) {
+                this.showToast("Error rejecting leave.", "error");
+            } finally {
+                this.isSubmitting = false;
+            }
+        },
+
+        async initiateApproval() {
+            this.isSubmitting = true;
+            this.currentApproveId = this.reviewingLeave.id;
+            
+            try {
+                const res = await fetch(`${CONFIG.API_URL}?action=sendOTP&leaveId=${this.currentApproveId}`);
+                const data = await res.json();
+                
+                if(data.success) {
+                    this.reviewModalObj.hide();
+                    this.otpInput = '';
+                    if(!this.otpModalObj) {
+                        this.otpModalObj = new bootstrap.Modal(document.getElementById('otpModal'));
+                    }
+                    this.otpModalObj.show();
+                    this.showToast("OTP sent to Symplye@gmail.com", "success");
+                } else {
+                    this.showToast(data.error, "error");
+                }
+            } catch(e) {
+                this.showToast("Failed to send OTP.", "error");
+            } finally {
+                this.isSubmitting = false;
+            }
+        },
+
+        async verifyOTP() {
+            if(this.otpInput.length !== 6) return;
+            this.isSubmitting = true;
+            
+            try {
+                const url = `${CONFIG.API_URL}?action=verifyAndApprove&leaveId=${this.currentApproveId}&otp=${this.otpInput}&comment=${encodeURIComponent(this.adminComment)}`;
+                const res = await fetch(url);
+                const data = await res.json();
+                
+                if(data.success) {
+                    this.otpModalObj.hide();
+                    await this.loadData();
+                    this.showToast("Leave approved successfully!", "success");
+                } else {
+                    this.showToast(data.error, "error");
+                }
+            } catch(e) {
+                this.showToast("Verification failed.", "error");
+            } finally {
+                this.isSubmitting = false;
+            }
         }
     }
 };
