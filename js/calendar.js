@@ -53,7 +53,12 @@ const calendarModule = {
                 const empData = await empRes.json();
                 const leaveData = await leaveRes.json();
 
-                this.employees = Array.isArray(empData) ? empData.map(e => ({ id: e.ID, name: e.Name, role: e.Role })) : [];
+                // Map all fields properly
+                this.employees = Array.isArray(empData) ? empData.map(e => ({ 
+                    id: e.ID, name: e.Name, role: e.Role,
+                    department: e.Department, email: e.Email,
+                    totalAllowance: e.TotalAllowance, usedAllowance: e.UsedAllowance
+                })) : [];
                 
                 const typeMap = {
                     'annual': { class: 'bg-annual', label: 'Annual', fcClass: 'evt-annual' },
@@ -80,7 +85,22 @@ const calendarModule = {
                 this.generateDays(); 
                 this.processSidePanels();
                 
-                // FIX: Wait for Vue to finish rendering the DOM before building the calendar
+                // URL Parsing Logic
+                const urlParams = new URLSearchParams(window.location.search);
+                const empIdParam = urlParams.get('empId');
+                
+                if (empIdParam) {
+                    const foundEmp = this.employees.find(e => e.id === empIdParam);
+                    if (foundEmp) {
+                        this.targetEmployee = foundEmp;
+                        this.activeTab = 'myleave';
+                    } else {
+                        this.targetEmployee = this.employees[0]; // fallback
+                    }
+                } else {
+                    this.targetEmployee = this.employees[0];
+                }
+                
                 this.$nextTick(() => {
                     this.renderFullCalendar();
                 });
@@ -129,16 +149,10 @@ const calendarModule = {
         },
         renderFullCalendar() {
             const calendarEl = this.$refs.calendarEl;
-            if (!calendarEl) {
-                console.error("Calendar DOM element not found!");
-                return;
-            }
+            if (!calendarEl) return;
 
-            // FIX: Catch errors if FullCalendar library fails to load from CDN
             try {
-                if (typeof FullCalendar === 'undefined') {
-                    throw new Error("FullCalendar library is not loaded. Check your internet connection or adblocker.");
-                }
+                if (typeof FullCalendar === 'undefined') return;
 
                 const events = this.leaves.filter(l => l.status !== 'Rejected').map(l => ({
                     title: `${l.emp.split(' ')[0]} · ${l.label}`,
@@ -162,8 +176,7 @@ const calendarModule = {
                     this.fcCalendar.render();
                 }
             } catch (error) {
-                console.error("Failed to render FullCalendar:", error.message);
-                calendarEl.innerHTML = `<div class="text-center text-danger py-5">Failed to load Calendar: ${error.message}</div>`;
+                console.error("Calendar Error:", error.message);
             }
         },
         getLeavesForEmp(empName) { return this.leaves.filter(l => l.emp === empName); },
