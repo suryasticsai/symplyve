@@ -1,6 +1,5 @@
 const { createApp } = Vue;
 
-// Intercept console logs for the Debug Console UI
 const originalLog = console.log;
 const originalError = console.error;
 let vueAppInstance = null;
@@ -22,12 +21,13 @@ window.addEventListener('error', function(event) {
 const app = createApp({
     data() {
         return {
-            activeTab: 'welcome', // Default to welcome tab
+            activeTab: 'welcome',
             showDebug: false,
             debugLogs: [],
             ...notificationModule.data(),
             ...calendarModule.data(),
             ...leaveModule.data(),
+            ...authModule.data(),
         }
     },
     computed: {
@@ -40,10 +40,9 @@ const app = createApp({
         ...apiModule.methods, 
         ...calendarModule.methods,
         ...leaveModule.methods,
+        ...authModule.methods,
         
-        toggleDebug() {
-            this.showDebug = !this.showDebug;
-        },
+        toggleDebug() { this.showDebug = !this.showDebug; },
         addDebugLog(type, message) {
             const time = new Date().toLocaleTimeString();
             this.debugLogs.push({ type, message, time });
@@ -52,20 +51,26 @@ const app = createApp({
                 if (el) el.scrollTop = el.scrollHeight;
             }, 50);
         },
-        clearLogs() {
-            this.debugLogs = [];
-        },
+        clearLogs() { this.debugLogs = []; },
         copyLogs() {
             const text = this.debugLogs.map(l => `[${l.time}] ${l.type.toUpperCase()}: ${l.message}`).join('\n');
-            navigator.clipboard.writeText(text).then(() => alert("Logs copied to clipboard!"));
+            navigator.clipboard.writeText(text).then(() => alert("Logs copied!"));
+        }
+    },
+    watch: {
+        activeTab(newVal) {
+            if (newVal === 'myleave') {
+                this.checkAuth();
+            }
         }
     },
     mounted() {
         vueAppInstance = this;
-        this.addDebugLog('info', 'Application mounted successfully.');
+        this.addDebugLog('info', 'App mounted.');
         this.generateDays();
-        this.loadData();
+        this.loadData().then(() => {
+            if (this.activeTab === 'myleave') this.checkAuth();
+        });
     }
 });
-
 app.mount('#app');
