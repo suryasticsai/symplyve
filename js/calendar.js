@@ -5,6 +5,7 @@ const calendarModule = {
             days: [],
             leaves: [],
             isLoading: true, 
+            fetchError: null, // NEW: Holds error messages if fetch fails
             searchQuery: '',
             reportSearch: '', 
             
@@ -52,6 +53,15 @@ const calendarModule = {
         async loadData() {
             const isFirstLoad = this.employees.length === 0;
             if (isFirstLoad) this.isLoading = true;
+            this.fetchError = null;
+
+            // FAILSAFE: Stop loading after 10 seconds no matter what
+            const failsafeTimer = setTimeout(() => {
+                if (this.isLoading) {
+                    this.isLoading = false;
+                    this.fetchError = "Connection timed out. Ensure Google Apps Script is deployed as 'Anyone' and the URL in config.js is correct.";
+                }
+            }, 10000);
 
             try {
                 const [empData, leaveData] = await Promise.all([
@@ -59,12 +69,16 @@ const calendarModule = {
                     this.fetchLeavesFromSheet()
                 ]);
 
-                this.employees = Array.isArray(empData) ? empData.map(e => ({ 
+                // Check if GAS returned an error object instead of an array
+                if (!Array.isArray(empData)) throw new Error(empData.error || "Invalid response from API. Did you run setupDatabase()?");
+                if (!Array.isArray(leaveData)) throw new Error(leaveData.error || "Invalid response from API.");
+
+                this.employees = empData.map(e => ({ 
                     id: e.ID, name: e.Name, role: e.Role,
                     department: e.Department, email: e.Email,
                     totalAllowance: e.TotalAllowance, usedAllowance: e.UsedAllowance,
                     hasPassword: e.hasPassword
-                })) : [];
+                }));
                 
                 const typeMap = {
                     'annual': { class: 'bg-annual', label: 'Annual', fcClass: 'evt-annual' },
@@ -74,7 +88,7 @@ const calendarModule = {
                     'wfh': { class: 'bg-wfh', label: 'WFH', fcClass: 'evt-wfh' }
                 };
 
-                this.leaves = Array.isArray(leaveData) ? leaveData.map(row => {
+                this.leaves = leaveData.map(row => {
                     if (!row.StartDate || !row.EndDate) return null;
                     const typeInfo = typeMap[row.Type.toLowerCase()] || { class: 'bg-annual', label: row.Type, fcClass: 'evt-annual' };
                     
@@ -86,7 +100,7 @@ const calendarModule = {
                         reason: row.Reason || '',
                         adminComment: row.AdminComment || ''
                     };
-                }).filter(Boolean) : [];
+                }).filter(Boolean);
 
                 this.generateDays(); 
                 this.processSidePanels();
@@ -104,7 +118,7 @@ const calendarModule = {
                         }
                     } else {
                         this.currentUser = { id: 'ADMIN', name: 'Admin' };
-                        this.targetEmployee = this.employees[0];
+                        if(this.employees.length > 0) this.targetEmployee = this.employees[0];
                     }
                 }
                 
@@ -115,7 +129,9 @@ const calendarModule = {
 
             } catch (error) {
                 console.error("Fetch Error:", error);
+                this.fetchError = error.message || "Failed to fetch data. Check console for details.";
             } finally {
+                clearTimeout(failsafeTimer);
                 this.isLoading = false;
             }
         },
