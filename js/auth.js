@@ -7,7 +7,8 @@ const authModule = {
             confirmPin: '',
             loginError: '',
             isLoggingIn: false,
-            loginModalObj: null
+            loginModalObj: null,
+            authToken: sessionStorage.getItem('symplyve_token') || null
         }
     },
     methods: {
@@ -16,9 +17,7 @@ const authModule = {
                 this.isAuthenticated = true;
                 return;
             }
-
-            const sessionKey = `auth_${this.targetEmployee.id}`;
-            if (sessionStorage.getItem(sessionKey) === 'true') {
+            if (this.authToken && sessionStorage.getItem(`auth_${this.targetEmployee.id}`) === 'true') {
                 this.isAuthenticated = true;
                 return;
             }
@@ -38,6 +37,7 @@ const authModule = {
         async attemptLogin() {
             if (!this.loginPassword) return;
             
+            // --- CREATE PIN ---
             if (this.isCreatingPin) {
                 if (this.loginPassword !== this.confirmPin) {
                     this.loginError = "PINs do not match.";
@@ -55,10 +55,8 @@ const authModule = {
                     
                     if (data.success) {
                         this.targetEmployee.hasPassword = true; 
-                        this.isAuthenticated = true;
-                        sessionStorage.setItem(`auth_${this.targetEmployee.id}`, 'true');
-                        this.loginModalObj.hide();
-                        this.showToast("PIN created successfully!", "success");
+                        // Auto login after creation
+                        await this.login(this.targetEmployee.id, this.loginPassword);
                     } else {
                         this.loginError = data.error;
                     }
@@ -70,18 +68,29 @@ const authModule = {
                 return;
             }
 
+            // --- LOGIN ---
+            await this.login(this.targetEmployee.id, this.loginPassword);
+        },
+
+        async login(empId, password) {
             this.isLoggingIn = true;
             this.loginError = '';
 
             try {
-                const res = await fetch(`${CONFIG.API_URL}?action=login&empId=${this.targetEmployee.id}&password=${encodeURIComponent(this.loginPassword)}`);
+                const res = await fetch(`${CONFIG.API_URL}?action=login&empId=${empId}&password=${encodeURIComponent(password)}`);
                 const data = await res.json();
 
                 if (data.success) {
+                    this.authToken = data.token;
+                    sessionStorage.setItem('symplyve_token', data.token);
+                    sessionStorage.setItem(`auth_${empId}`, 'true');
+                    
                     this.isAuthenticated = true;
-                    sessionStorage.setItem(`auth_${this.targetEmployee.id}`, 'true');
                     this.loginModalObj.hide();
                     this.showToast("Profile unlocked!", "success");
+                    
+                    // Refresh data to get private comments
+                    await this.loadData();
                 } else {
                     this.loginError = data.error || "Invalid PIN.";
                 }
@@ -93,9 +102,11 @@ const authModule = {
         },
         
         logout() {
+            sessionStorage.removeItem('symplyve_token');
             sessionStorage.removeItem(`auth_${this.targetEmployee.id}`);
+            this.authToken = null;
             this.isAuthenticated = false;
             this.checkAuth();
         }
     }
-}; 
+};
