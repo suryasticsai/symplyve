@@ -3,8 +3,7 @@ const apiModule = {
         async fetchLeavesFromSheet() {
             try {
                 const response = await fetch(`${CONFIG.API_URL}?action=getLeaves`);
-                const data = await response.json();
-                return Array.isArray(data) ? data : [];
+                return await response.json();
             } catch (error) {
                 console.error("Error fetching leaves:", error);
                 return [];
@@ -13,9 +12,7 @@ const apiModule = {
         async fetchEmployeesFromSheet() {
             try {
                 const response = await fetch(`${CONFIG.API_URL}?action=getEmployees`);
-                const data = await response.json();
-                // Ensure we always return an array, even if the sheet is empty or errors out
-                return Array.isArray(data) ? data : [];
+                return await response.json();
             } catch (error) {
                 console.error("Error fetching employees:", error);
                 return [];
@@ -25,17 +22,22 @@ const apiModule = {
             try {
                 const payloadStr = btoa(JSON.stringify(leaveData));
                 const url = `${CONFIG.API_URL}?action=addLeave&payload=${payloadStr}`;
-                
                 const response = await fetch(url);
-                const data = await response.json();
-                
-                if (!data.success && data.error) {
-                    return { success: false, error: data.error };
-                }
-                return data;
+                return await response.json();
             } catch (error) {
-                console.error("Fetch Error:", error);
-                return { success: false, error: "Network error. Check console." };
+                console.error("Error saving to Google Sheets:", error);
+                return { success: false, error: "Network error." };
+            }
+        },
+        async updateLeaveStatus(payload) {
+            try {
+                const payloadStr = btoa(JSON.stringify(payload));
+                const url = `${CONFIG.API_URL}?action=updateLeaveStatus&payload=${payloadStr}`;
+                const response = await fetch(url);
+                return await response.json();
+            } catch (error) {
+                console.error("Error updating status:", error);
+                return { success: false, error: "Network error." };
             }
         }
     }
