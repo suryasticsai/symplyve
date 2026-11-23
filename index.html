@@ -26,19 +26,31 @@
     </a>
 
     <div class="header-actions ms-auto">
+      <!-- DEBUG TOGGLE -->
       <button class="btn-icon text-primary" title="Toggle Debug Console" @click="toggleDebug">
         <i class="bi bi-terminal fs-5"></i>
       </button>
+      
+      <!-- NOTIFICATIONS -->
       <button class="btn-icon position-relative" title="Notifications" @click="toggleNotifications">
         <i class="bi bi-bell fs-5"></i>
         <span class="notif-dot" v-if="unreadNotifications > 0"></span>
       </button>
-      <div class="user-chip d-none d-sm-flex" @click="openProfile(isAdmin ? {name: 'Admin', role: 'System Admin', id: 'ADMIN'} : currentUser)" style="cursor: pointer;">
+      
+      <!-- PROFILE CHIP -->
+      <div class="user-chip d-none d-sm-flex" @click="isAdmin ? null : openProfile(currentUser)" style="cursor: pointer;">
         <div class="user-avatar" :style="{ background: isAdmin ? '#64748b' : 'linear-gradient(135deg, #2563eb, #06b6d4)' }">
             {{ isAdmin ? 'AD' : (currentUser ? currentUser.name.substring(0,2).toUpperCase() : '??') }}
         </div>
         <span style="font-weight:600;font-size:0.875rem;">{{ isAdmin ? 'Admin' : (currentUser ? currentUser.name : 'Loading...') }}</span>
       </div>
+      
+      <!-- LOCK PROFILE BUTTON (For Employees) -->
+      <button v-if="isAuthenticated && !isAdmin" class="btn btn-sm btn-outline-danger ms-2" @click="logout" title="Lock Profile">
+        <i class="bi bi-lock"></i>
+      </button>
+
+      <!-- APPLY LEAVE BUTTON -->
       <button class="btn-apply ms-2" @click="openLeaveModal">
         <i class="bi bi-plus-lg"></i>
         <span class="d-none d-sm-inline">Apply Leave</span>
@@ -51,16 +63,18 @@
     <a href="#" class="nav-link" :class="{ active: activeTab === 'welcome' }" @click.prevent="activeTab = 'welcome'">Welcome</a>
     <a href="#" class="nav-link" :class="{ active: activeTab === 'calendar' }" @click.prevent="activeTab = 'calendar'">Team Calendar</a>
     <a href="#" class="nav-link" :class="{ active: activeTab === 'myleave' }" @click.prevent="activeTab = 'myleave'">My Leave</a>
+    
+    <!-- ADMIN ONLY TABS -->
     <a href="#" class="nav-link" :class="{ active: activeTab === 'approvals' }" @click.prevent="activeTab = 'approvals'" v-if="isAdmin">
       Approvals <span class="nav-badge">{{ pendingApprovalsCount }}</span>
     </a>
     <a href="#" class="nav-link" :class="{ active: activeTab === 'reports' }" @click.prevent="activeTab = 'reports'" v-if="isAdmin">Reports</a>
   </nav>
 
-  <!-- ===== MAIN ===== -->
+  <!-- ===== MAIN CONTENT ===== -->
   <main class="main-content flex-grow-1">
     
-    <!-- SKELETON LOADER -->
+    <!-- SKELETON LOADER (Only on initial load) -->
     <div v-if="isLoading" class="skeleton-wrapper">
       <div class="row g-3 mb-4">
         <div class="col-md-3"><div class="skeleton-box" style="height: 80px;"></div></div>
@@ -71,7 +85,9 @@
       <div class="skeleton-box" style="height: 500px;"></div>
     </div>
 
-    <div v-else>
+    <!-- ACTUAL CONTENT (v-show ensures calendar doesn't break) -->
+    <div v-show="!isLoading">
+      
       <!-- STATS ROW -->
       <div class="stats-row mb-4">
         <div class="stat-card">
@@ -120,10 +136,6 @@
             </div>
           </div>
         </div>
-
-        <div class="alert alert-primary d-inline-block shadow-sm" role="alert">
-          <i class="bi bi-lightbulb me-2"></i> <strong>Pro Tip:</strong> You can deep link to a specific user's profile by adding <code>?empId=EMP-001</code> to the URL.
-        </div>
       </div>
 
       <!-- VIEW: MY LEAVE -->
@@ -132,20 +144,17 @@
           <div class="card-header bg-white d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
             <h5 class="m-0 text-primary"><i class="bi bi-person-badge me-2"></i>My Leave Dashboard</h5>
             
+            <!-- Admin can switch employees -->
             <div class="d-flex align-items-center gap-2" v-if="isAdmin">
               <label class="fw-semibold small text-muted mb-0">Viewing:</label>
-              <select class="form-select form-select-sm fw-bold" v-model="targetEmployee" @change="updateURL()" style="width: auto; min-width: 200px;">
+              <select class="form-select form-select-sm fw-bold" v-model="targetEmployee" @change="updateURL(); checkAuth()" style="width: auto; min-width: 200px;">
                 <option v-for="emp in employees" :key="emp.id" :value="emp">{{ emp.name }} ({{ emp.id }})</option>
               </select>
-              <button class="btn btn-sm btn-outline-primary ms-2" @click="openProfile(targetEmployee)">View Profile</button>
-            </div>
-            <div v-else>
-              <button class="btn btn-sm btn-outline-danger" @click="logout"><i class="bi bi-lock me-1"></i> Lock Profile</button>
             </div>
           </div>
 
           <div class="row g-0" v-if="targetEmployee">
-            <!-- Left: Balance Stats -->
+            <!-- Left: Employee Info & Balances -->
             <div class="col-md-4 border-end p-4 text-center">
               <div class="stat-icon blue mx-auto mb-3" style="width:64px;height:64px;font-size:2rem;"><i class="bi bi-person-badge-fill"></i></div>
               <h4 class="fw-bold mb-1">{{ targetEmployee.name }}</h4>
@@ -167,7 +176,7 @@
               </div>
             </div>
 
-            <!-- Right: Leave History -->
+            <!-- Right: Leave History Table -->
             <div class="col-md-8 p-4 bg-light" style="border-radius: 0 0 16px 0;">
               <h6 class="fw-bold mb-3">Leave History</h6>
               <div class="table-responsive">
@@ -178,6 +187,7 @@
                       <th>Dates</th>
                       <th>Days</th>
                       <th>Status</th>
+                      <!-- Only show Manager Note if authenticated -->
                       <th v-if="isAuthenticated">Manager Note</th>
                     </tr>
                   </thead>
@@ -185,14 +195,14 @@
                     <tr v-for="l in myLeaves" :key="l.id">
                       <td><span class="badge" :class="l.typeClass">{{ l.label }}</span></td>
                       <td class="small text-muted">{{ l.startDate }} to {{ l.endDate }}</td>
-                      <td class="fw-bold">{{ l.end - l.start + 1 }}</td>
+                      <td class="fw-bold">{{ Math.ceil((new Date(l.endDate) - new Date(l.startDate)) / (1000 * 60 * 60 * 24)) + 1 }}</td>
                       <td>
                         <span class="status-pill" :class="l.status === 'Approved' ? 'status-in' : (l.status === 'Pending' ? 'bg-warning text-dark' : 'status-out')">
                           {{ l.status }}
                         </span>
                       </td>
                       <td v-if="isAuthenticated">
-                        <span v-if="l.adminComment" class="text-primary fw-semibold small" style="max-width: 200px; display: inline-block; white-space: normal;">
+                        <span v-if="l.adminComment" class="text-primary fw-semibold small">
                           <i class="bi bi-chat-left-text me-1"></i> {{ l.adminComment }}
                         </span>
                         <span v-else class="text-muted">-</span>
@@ -238,8 +248,10 @@
             </div>
           </div>
           
+          <!-- FULLCALENDAR WRAPPER -->
           <div v-show="currentView === 'calendar'" style="min-height: 600px; padding: 1rem;" id="calendar" ref="calendarEl"></div>
           
+          <!-- GANTT TIMELINE -->
           <div v-show="currentView === 'timeline'" class="timeline-scroll-area">
             <div class="grid-header" :style="{ gridTemplateColumns: `220px repeat(${days.length}, minmax(40px, 1fr))` }">
                 <div class="col-emp">EMPLOYEE</div>
@@ -261,6 +273,7 @@
             </div>
           </div>
 
+          <!-- LEGEND -->
           <div class="legend d-flex flex-wrap gap-3 p-3 bg-light border-top">
             <div class="d-flex align-items-center gap-2 small fw-semibold text-muted"><div style="width:10px; height:10px; border-radius:3px; background:#3b82f6;"></div> Annual</div>
             <div class="d-flex align-items-center gap-2 small fw-semibold text-muted"><div style="width:10px; height:10px; border-radius:3px; background:#f59e0b;"></div> Sick</div>
@@ -270,6 +283,7 @@
           </div>
         </div>
 
+        <!-- RIGHT: SIDE PANELS -->
         <div class="side-panel">
           <div class="card">
             <div class="card-header"><h5>Leave Balance</h5></div>
@@ -281,7 +295,7 @@
               <span class="badge bg-danger-subtle text-danger">{{ outTodayList.length }}</span>
             </div>
             <div id="outTodayList">
-              <div class="team-member" v-for="emp in outTodayList" :key="emp.name" @click="openProfile(emp)" style="cursor: pointer;">
+              <div class="team-member" v-for="emp in outTodayList" :key="emp.name" @click="openProfile(employees.find(e => e.name === emp.name))" style="cursor: pointer;">
                 <div class="member-avatar">{{ emp.name.substring(0,2).toUpperCase() }}</div>
                 <div class="member-info"><strong>{{ emp.name }}</strong><small>{{ emp.type }} Leave</small></div>
                 <span class="status-pill status-out">Out</span>
@@ -292,8 +306,8 @@
         </div>
       </div>
 
-      <!-- VIEW: APPROVALS -->
-      <div v-show="activeTab === 'approvals'" class="card">
+      <!-- VIEW: APPROVALS (ADMIN ONLY) -->
+      <div v-show="activeTab === 'approvals' && isAdmin" class="card">
         <div class="card-header d-flex justify-content-between align-items-center">
           <h5 class="m-0"><i class="bi bi-check2-square me-2 text-primary"></i>Pending Approvals</h5>
           <span class="badge bg-warning text-dark">{{ pendingRequests.length }} Requests</span>
@@ -319,7 +333,7 @@
                   </div>
                 </td>
                 <td><span class="badge bg-secondary">{{ req.label.split(' ')[0] }}</span></td>
-                <td class="text-muted small">{{ req.label.match(/\((.*?)\)/)[1] }}</td>
+                <td class="text-muted small">{{ req.dates }}</td>
                 <td class="text-muted small text-truncate" style="max-width: 200px;" :title="req.reason">{{ req.reason || 'N/A' }}</td>
                 <td><span class="status-pill status-out">Pending</span></td>
                 <td class="text-end">
@@ -337,8 +351,8 @@
         </div>
       </div>
 
-      <!-- VIEW: REPORTS -->
-      <div v-show="activeTab === 'reports'" class="card">
+      <!-- VIEW: REPORTS (ADMIN ONLY) -->
+      <div v-show="activeTab === 'reports' && isAdmin" class="card">
         <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
           <h5 class="m-0"><i class="bi bi-file-earmark-bar-graph me-2 text-primary"></i>Leave Reports</h5>
           <div class="search-box-sm">
@@ -369,7 +383,7 @@
                 <td><span class="badge" :class="leave.typeClass">{{ leave.label }}</span></td>
                 <td>{{ leave.startDate }}</td>
                 <td>{{ leave.endDate }}</td>
-                <td>{{ leave.end - leave.start + 1 }} Days</td>
+                <td>{{ Math.ceil((new Date(leave.endDate) - new Date(leave.startDate)) / (1000 * 60 * 60 * 24)) + 1 }} Days</td>
                 <td>
                   <span class="status-pill" :class="leave.status === 'Approved' ? 'status-in' : (leave.status === 'Pending' ? 'bg-warning text-dark' : 'status-out')">
                     {{ leave.status }}
@@ -386,7 +400,7 @@
     </div>
   </main>
 
-  <!-- FOOTER -->
+  <!-- ===== FOOTER ===== -->
   <footer class="footer mt-auto py-3 bg-white border-top">
     <div class="container-fluid px-4 d-flex flex-column flex-md-row justify-content-between align-items-center text-muted small">
       <div class="d-flex align-items-center gap-2 mb-2 mb-md-0">
@@ -493,7 +507,7 @@
     </div>
   </div>
 
-  <!-- 3. Login/Set PIN Modal -->
+  <!-- 3. Login / Create PIN Modal -->
   <div class="modal fade" id="loginModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
     <div class="modal-dialog modal-dialog-centered modal-sm">
       <div class="modal-content border-0 shadow-lg text-center" style="border-radius: 16px;">
@@ -501,10 +515,9 @@
           <div class="bg-primary text-white rounded-circle d-inline-flex justify-content-center align-items-center mb-3 shadow" style="width: 60px; height: 60px;">
             <i class="bi bi-shield-lock-fill fs-2"></i>
           </div>
-          <h5 class="fw-bold mb-1">{{ isCreatingPin ? 'Create a Secure PIN' : 'Secure Login' }}</h5>
+          <h5 class="fw-bold mb-1" id="loginTitle">Secure Login</h5>
           <p class="text-muted small mb-4">
-            {{ isCreatingPin ? 'First time here? Set a PIN to protect your privacy.' : 'Enter your PIN to view private comments.' }}
-            <br><strong class="text-dark">{{ targetEmployee?.name }}</strong>
+            {{ isCreatingPin ? 'First time here? Set a PIN to protect your privacy.' : 'Enter your PIN to view private data.' }}
           </p>
           
           <input type="password" class="form-control form-control-lg text-center mb-3" 
@@ -517,11 +530,12 @@
           
           <div v-if="loginError" class="text-danger small mb-3 fw-bold">{{ loginError }}</div>
           
-          <div class="d-grid">
+          <div class="d-grid gap-2">
             <button class="btn btn-primary fw-bold" @click="attemptLogin" :disabled="!loginPassword || isLoggingIn">
               <span v-if="isLoggingIn" class="spinner-border spinner-border-sm me-2"></span> 
-              {{ isCreatingPin ? 'Save PIN & Unlock' : 'Unlock Profile' }}
+              {{ isCreatingPin ? 'Save PIN & Unlock' : 'Unlock' }}
             </button>
+            <button class="btn btn-light" @click="loginModalObj.hide()">Cancel</button>
           </div>
         </div>
       </div>
@@ -544,7 +558,7 @@
             </div>
             <div class="d-flex justify-content-between mb-2">
               <span class="text-muted small fw-bold">Dates</span>
-              <span class="fw-bold">{{ reviewingLeave.label.match(/\((.*?)\)/)[1] }}</span>
+              <span class="fw-bold">{{ reviewingLeave.dates }}</span>
             </div>
             <div class="d-flex justify-content-between mb-0">
               <span class="text-muted small fw-bold">Employee Reason</span>
@@ -639,6 +653,7 @@
   </div>
 </div>
 
+<!-- Scripts -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
@@ -653,4 +668,4 @@
 <script src="js/app.js"></script>
 
 </body>
-</html> 
+</html>
