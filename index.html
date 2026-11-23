@@ -74,6 +74,13 @@
   <!-- ===== MAIN CONTENT ===== -->
   <main class="main-content flex-grow-1">
     
+    <!-- ERROR STATE -->
+    <div v-if="fetchError" class="alert alert-danger shadow-sm border-danger mb-4" style="border-radius: 12px;">
+      <h5 class="fw-bold"><i class="bi bi-exclamation-triangle-fill me-2"></i> Connection Error</h5>
+      <p class="mb-0">{{ fetchError }}</p>
+      <button class="btn btn-sm btn-outline-danger mt-3 fw-bold" @click="loadData">Try Again</button>
+    </div>
+
     <!-- SKELETON LOADER (Only on initial load) -->
     <div v-if="isLoading" class="skeleton-wrapper">
       <div class="row g-3 mb-4">
@@ -86,7 +93,7 @@
     </div>
 
     <!-- ACTUAL CONTENT (v-show ensures calendar doesn't break) -->
-    <div v-show="!isLoading">
+    <div v-show="!isLoading && !fetchError">
       
       <!-- STATS ROW -->
       <div class="stats-row mb-4">
