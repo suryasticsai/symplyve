@@ -98,4 +98,4 @@ const authModule = {
             this.checkAuth();
         }
     }
-};
+}; 
