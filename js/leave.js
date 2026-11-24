@@ -1,203 +1,241 @@
 const leaveModule = {
     data() {
         return {
-            selectedEmployee: null,
-            targetEmployee: null, 
-            profileEmployee: null, 
+            selectedEmployeeId: '',
+            targetEmployeeId: '',
+            profileEmployee: null,
             newLeave: { type: 'annual', startDate: '', endDate: '', reason: '' },
             isSubmitting: false,
-            toasts: [], 
-            
-            // Admin Approval Flow State
+            toasts: [],
+
             reviewingLeave: null,
             adminComment: '',
             otpInput: '',
-            currentApproveId: null,
-            
-            // Modal Instances
-            reviewModalObj: null,
-            otpModalObj: null,
-            profileModalObj: null,
-            leaveModalObj: null
-        }
+            otpSentTo: '',
+            currentApproveId: null
+        };
     },
     computed: {
+        targetEmployee() { return this.employees.find(e => e.id === this.targetEmployeeId) || null; },
+        selectedEmployee() { return this.employees.find(e => e.id === this.selectedEmployeeId) || null; },
         myLeaves() {
             if (!this.targetEmployee) return [];
             return this.leaves
-                .filter(l => l.emp === this.targetEmployee.name)
-                .sort((a, b) => new Date(b.startDate) - new Date(a.startDate));
+                .filter(l => l.empId === this.targetEmployee.id)
+                .sort((a, b) => (a.startDate < b.startDate ? 1 : -1));
+        },
+        leaveDays() {
+            const { startDate: s, endDate: e } = this.newLeave;
+            if (!dateUtil.isISO(s) || !dateUtil.isISO(e) || e < s) return 0;
+            return dateUtil.days(s, e);
+        },
+        leaveDateError() {
+            const { startDate: s, endDate: e } = this.newLeave;
+            if (dateUtil.isISO(s) && dateUtil.isISO(e) && e < s) return 'End date cannot be before the start date.';
+            return '';
         }
     },
     methods: {
-        calculateUsed(empName) {
-            if (!empName) return 0;
+        /* ---------- balances (same rules as the server) ---------- */
+        allowanceOf(emp) {
+            if (!emp) return 24;
+            const t = emp.totalAllowance;
+            return (t === '' || t == null || !isFinite(Number(t))) ? 24 : Number(t);
+        },
+        calculateUsed(emp) {
+            if (!emp) return 0;
+            const year = String(new Date().getFullYear());
             return this.leaves
-                .filter(l => l.emp === empName && l.status === 'Approved')
-                .reduce((sum, l) => {
-                    const s = new Date(l.startDate);
-                    const e = new Date(l.endDate);
-                    const days = Math.ceil((e - s) / (1000 * 60 * 60 * 24)) + 1;
-                    return sum + days;
-                }, 0);
+                .filter(l => l.empId === emp.id && l.typeKey === 'annual' && l.status === 'Approved' && l.startDate.slice(0, 4) === year)
+                .reduce((s, l) => s + l.days, 0);
         },
 
-        openLeaveModal() {
-            if (!this.selectedEmployee && this.employees.length > 0) {
-                this.selectedEmployee = this.isAdmin ? this.employees[0] : this.currentUser;
+        /* ---------- modal helpers ---------- */
+        modal(id) {
+            return bootstrap.Modal.getOrCreateInstance(document.getElementById(id));
+        },
+        /** Close one modal, then open another once the first has finished hiding. */
+        swapModal(fromId, toId) {
+            const el = document.getElementById(fromId);
+            const next = () => this.modal(toId).show();
+            if (el && el.classList.contains('show')) {
+                el.addEventListener('hidden.bs.modal', next, { once: true });
+                this.modal(fromId).hide();
+            } else {
+                next();
             }
-            this.newLeave = { type: 'annual', startDate: '', endDate: '', reason: '' };
+        },
+        showToast(msg, type) {
+            const id = Date.now() + Math.random();
+            this.toasts.push({ id, message: msg, type });
+            setTimeout(() => { this.toasts = this.toasts.filter(t => t.id !== id); }, 4500);
+        },
+        /** Show an API error, and send the user back to sign-in if their session died. */
+        failWith(res, fallback) {
+            this.showToast((res && res.error) || fallback, 'error');
+            if (res && res.code === 'AUTH') this.promptLogin('Your session expired. Sign in again to continue.');
+        },
+
+        /* ---------- apply for leave ---------- */
+        openLeaveModal(prefill = {}) {
+            if (!this.isAuthenticated) {
+                this.promptLogin('Sign in to apply for leave.', () => this.openLeaveModal(prefill));
+                return;
+            }
+            this.selectedEmployeeId = this.isAdmin
+                ? (this.targetEmployeeId || (this.employees[0] && this.employees[0].id) || '')
+                : this.currentUser.id;
+            this.newLeave = {
+                type: 'annual',
+                startDate: prefill.startDate || '',
+                endDate: prefill.endDate || prefill.startDate || '',
+                reason: ''
+            };
             this.isSubmitting = false;
-            
-            if(!this.leaveModalObj) {
-                this.leaveModalObj = new bootstrap.Modal(document.getElementById('leaveModal'));
-            }
-            this.leaveModalObj.show();
+            this.modal('leaveModal').show();
         },
 
-        openProfile(emp) {
-            if (!emp) return;
-            this.profileEmployee = emp;
-            if(!this.profileModalObj) {
-                this.profileModalObj = new bootstrap.Modal(document.getElementById('profileModal'));
-            }
-            this.profileModalObj.show();
-        },
-
-        updateURL() {
-            if (this.targetEmployee) {
-                const url = new URL(window.location);
-                url.searchParams.set('empId', this.targetEmployee.id);
-                window.history.pushState({}, '', url);
-            }
+        onStartDateChange() {
+            const { startDate: s, endDate: e } = this.newLeave;
+            if (dateUtil.isISO(s) && (!dateUtil.isISO(e) || e < s)) this.newLeave.endDate = s;
         },
 
         async submitLeave() {
-            if (!this.selectedEmployee) return;
-            if (!this.newLeave.startDate || !this.newLeave.endDate) {
-                this.showToast("Please select both start and end dates.", "error");
+            if (this.isSubmitting) return;
+            if (!this.leaveDays) {
+                this.showToast(this.leaveDateError || 'Choose a start and end date.', 'error');
                 return;
             }
-            
+            if (this.isAdmin && !this.selectedEmployeeId) {
+                this.showToast('Select an employee.', 'error');
+                return;
+            }
+
             this.isSubmitting = true;
-            const payload = {
-                employeeId: this.selectedEmployee.id,
-                employeeName: this.selectedEmployee.name,
-                employeeEmail: this.selectedEmployee.email,
-                type: this.newLeave.type,
-                startDate: this.newLeave.startDate,
-                endDate: this.newLeave.endDate,
-                reason: this.newLeave.reason,
-                status: 'Pending'
-            };
-
             try {
-                const data = await this.saveLeaveToSheet(payload);
+                const res = await this.api('addLeave', {
+                    employeeId: this.isAdmin ? this.selectedEmployeeId : undefined,   // ignored for non-admins
+                    type: this.newLeave.type,
+                    startDate: this.newLeave.startDate,
+                    endDate: this.newLeave.endDate,
+                    reason: this.newLeave.reason
+                }, { auth: true });
 
-                if (data.success) {
-                    this.leaveModalObj.hide();
-                    await this.loadData(); 
-                    this.showToast(`Leave request submitted successfully.`, 'success');
+                if (res && res.success) {
+                    this.modal('leaveModal').hide();
+                    await this.loadData({ silent: true });
+                    this.showToast('Leave request submitted. You will get an email once it is reviewed.', 'success');
                 } else {
-                    this.showToast(data.error || "Failed to save.", 'error');
+                    this.failWith(res, 'Could not submit your request.');
                 }
             } catch (error) {
-                this.showToast("Network error.", 'error');
+                this.showToast(error.message || 'Network error.', 'error');
             } finally {
                 this.isSubmitting = false;
             }
         },
 
-        // ==========================================
-        // ADMIN REVIEW & OTP FLOW
-        // ==========================================
+        /* ---------- profile + deep link ---------- */
+        openProfile(emp) {
+            if (!emp) return;
+            this.profileEmployee = emp;
+            this.modal('profileModal').show();
+        },
+        updateURL() {
+            if (!this.targetEmployee) return;
+            const url = new URL(window.location);
+            url.searchParams.set('empId', this.targetEmployee.id);
+            window.history.replaceState({}, '', url);
+        },
+
+        /* ---------- admin review ---------- */
         openReviewModal(req) {
-            if (!this.isAdmin) return;
             this.reviewingLeave = req;
             this.adminComment = '';
-            
-            if(!this.reviewModalObj) {
-                this.reviewModalObj = new bootstrap.Modal(document.getElementById('reviewModal'));
-            }
-            this.reviewModalObj.show();
+            this.modal('reviewModal').show();
         },
 
         async handleReject() {
-            if (!this.isAdmin) return;
+            if (this.isSubmitting || !this.reviewingLeave) return;
             this.isSubmitting = true;
-            
             try {
-                const payload = { id: this.reviewingLeave.id, status: 'Rejected', comment: this.adminComment };
-                const data = await this.updateLeaveStatus(payload);
-                
-                if (data.success) {
-                    this.reviewModalObj.hide();
-                    await this.loadData();
-                    this.showToast("Leave rejected and email sent.", "error");
+                const res = await this.api('updateLeaveStatus', {
+                    id: this.reviewingLeave.id,
+                    status: 'Rejected',
+                    comment: this.adminComment
+                }, { auth: true });
+
+                if (res && res.success) {
+                    this.modal('reviewModal').hide();
+                    await this.loadData({ silent: true });
+                    this.showToast('Request rejected. The employee has been emailed.', 'success');
                 } else {
-                    this.showToast(data.error || "Failed to reject.", "error");
+                    this.failWith(res, 'Could not reject this request.');
                 }
-            } catch(e) {
-                this.showToast("Error rejecting leave.", "error");
+            } catch (e) {
+                this.showToast(e.message || 'Network error.', 'error');
             } finally {
                 this.isSubmitting = false;
             }
         },
 
         async initiateApproval() {
-            if (!this.isAdmin) return;
+            if (this.isSubmitting || !this.reviewingLeave) return;
             this.isSubmitting = true;
             this.currentApproveId = this.reviewingLeave.id;
-            
             try {
-                const data = await this.sendOTP(this.currentApproveId);
-                
-                if(data.success) {
-                    this.reviewModalObj.hide();
+                const res = await this.api('sendOTP', { leaveId: this.currentApproveId }, { auth: true });
+                if (res && res.success) {
                     this.otpInput = '';
-                    if(!this.otpModalObj) {
-                        this.otpModalObj = new bootstrap.Modal(document.getElementById('otpModal'));
-                    }
-                    this.otpModalObj.show();
-                    this.showToast("OTP sent to Symplye@gmail.com", "success");
+                    this.otpSentTo = res.sentTo || 'the admin email';
+                    this.swapModal('reviewModal', 'otpModal');
                 } else {
-                    this.showToast(data.error || "Failed to send OTP.", "error");
+                    this.failWith(res, 'Could not send the verification code.');
                 }
-            } catch(e) {
-                this.showToast("Failed to send OTP. Network error.", "error");
+            } catch (e) {
+                this.showToast(e.message || 'Network error.', 'error');
+            } finally {
+                this.isSubmitting = false;
+            }
+        },
+
+        async resendOtp() {
+            if (this.isSubmitting || !this.currentApproveId) return;
+            this.isSubmitting = true;
+            try {
+                const res = await this.api('sendOTP', { leaveId: this.currentApproveId }, { auth: true });
+                if (res && res.success) this.showToast('New code sent.', 'success');
+                else this.failWith(res, 'Could not send a new code.');
+            } catch (e) {
+                this.showToast(e.message || 'Network error.', 'error');
             } finally {
                 this.isSubmitting = false;
             }
         },
 
         async verifyOTP() {
-            if (!this.isAdmin || this.otpInput.length !== 6) return;
+            if (this.isSubmitting || this.otpInput.length !== 6) return;
             this.isSubmitting = true;
-            
             try {
-                const data = await this.verifyAndApprove(this.currentApproveId, this.otpInput, this.adminComment);
-                
-                if(data.success) {
-                    this.otpModalObj.hide();
-                    await this.loadData();
-                    this.showToast("Leave approved successfully!", "success");
+                const res = await this.api('verifyAndApprove', {
+                    leaveId: this.currentApproveId,
+                    otp: this.otpInput,
+                    comment: this.adminComment
+                }, { auth: true });
+
+                if (res && res.success) {
+                    this.modal('otpModal').hide();
+                    await this.loadData({ silent: true });
+                    this.showToast('Leave approved. The employee has been emailed.', 'success');
                 } else {
-                    this.showToast(data.error || "Invalid OTP.", "error");
+                    this.failWith(res, 'Verification failed.');
+                    if (res && res.code === 'OTP_EXPIRED') this.otpInput = '';
                 }
-            } catch(e) {
-                this.showToast("Verification failed. Network error.", "error");
+            } catch (e) {
+                this.showToast(e.message || 'Network error.', 'error');
             } finally {
                 this.isSubmitting = false;
             }
-        },
-
-        showToast(msg, type = 'success') {
-            const id = Date.now() + Math.random().toString(36).substr(2, 5);
-            this.toasts.push({ id, message: msg, type });
-            
-            setTimeout(() => {
-                this.toasts = this.toasts.filter(t => t.id !== id);
-            }, 4000);
         }
     }
 };
