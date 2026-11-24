@@ -1,5 +1,10 @@
 <div align="center">
   <img src="symplyve-logo1.png" alt="Symplyve Logo" width="150" style="border-radius: 20px; margin-bottom: 20px;" />
+<br>
+<a href="https://suryasticsai.github.io/symplyve/" target="_blank">
+  <img src="https://img.shields.io/badge/🚀_Access_Live_Application-2563EB?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Live App" />
+</a>
+<br><br>
   
   <h1>Symplyve</h1>
   <p><strong>CPMS Leave Management & Employee Dashboard</strong></p>
