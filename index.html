@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Symplyve · Elite Leave Management</title>
+  <title>Symplyve · CPMS Leave Management</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -53,7 +53,8 @@
           </div>
           <span style="font-weight:600;font-size:0.875rem;">{{ isAdmin ? 'Admin' : currentUser.name }}</span>
         </div>
-        <button class="btn btn-sm btn-outline-danger ms-2" @click="logout" title="Sign out">
+        <!-- Updated: Now triggers showLogoutConfirm() -->
+        <button class="btn btn-sm btn-outline-danger ms-2" @click="showLogoutConfirm" title="Sign out">
           <i class="bi bi-box-arrow-right"></i>
         </button>
       </template>
@@ -125,9 +126,11 @@
       </div>
 
       <!-- VIEW: WELCOME -->
-      <div v-show="activeTab === 'welcome'" class="welcome-container text-center py-4">
-        <h1 class="fw-bold mb-3" style="font-family: 'Outfit';">Welcome to <span class="text-primary">Symplyve</span></h1>
-        <p class="text-muted mb-5" style="max-width: 600px; margin: 0 auto;">The elite leave management platform for high-performing teams. Easily track time off, manage approvals, and view team availability.</p>
+      <div v-show="activeTab === 'welcome'" class="welcome-container py-4">
+        <div class="text-center mb-5">
+          <h1 class="fw-bold mb-3" style="font-family: 'Outfit';">Welcome to <span class="text-primary">Symplyve</span></h1>
+          <p class="text-muted" style="max-width: 600px; margin: 0 auto;">The elite leave management platform for high-performing teams. Easily track time off, manage approvals, and view team availability.</p>
+        </div>
 
         <div class="row g-4 justify-content-center mb-5">
           <div class="col-md-4">
@@ -152,6 +155,65 @@
             </div>
           </div>
         </div>
+
+        <!-- NEW: How to use & About Me Section -->
+        <div class="row g-4">
+          <!-- How to use -->
+          <div class="col-lg-7">
+            <div class="card border-0 shadow-sm p-4 h-100 bg-white">
+              <h5 class="fw-bold mb-3"><i class="bi bi-info-circle text-primary me-2"></i>How to use Symplyve (For Employees)</h5>
+              <ul class="list-group list-group-flush mb-0">
+                <li class="list-group-item bg-transparent px-0 pb-3">
+                  <div class="d-flex gap-3">
+                    <div class="bg-primary-subtle text-primary rounded-circle d-flex align-items-center justify-content-center fw-bold" style="width: 28px; height: 28px; flex-shrink: 0;">1</div>
+                    <div>
+                      <strong>Sign In</strong>
+                      <p class="text-muted small mb-0">Click the <strong>Sign in</strong> button in the top right. Select your name from the dropdown and enter your 4-digit PIN. If it's your first time, you'll be asked to create one.</p>
+                    </div>
+                  </div>
+                </li>
+                <li class="list-group-item bg-transparent px-0 py-3">
+                  <div class="d-flex gap-3">
+                    <div class="bg-primary-subtle text-primary rounded-circle d-flex align-items-center justify-content-center fw-bold" style="width: 28px; height: 28px; flex-shrink: 0;">2</div>
+                    <div>
+                      <strong>Apply for Leave</strong>
+                      <p class="text-muted small mb-0">Click the blue <strong>Apply Leave</strong> button. Choose your dates, leave type, and add an optional reason. You can also click directly on a date in the Team Calendar to pre-fill the form.</p>
+                    </div>
+                  </div>
+                </li>
+                <li class="list-group-item bg-transparent px-0 pt-3">
+                  <div class="d-flex gap-3">
+                    <div class="bg-primary-subtle text-primary rounded-circle d-flex align-items-center justify-content-center fw-bold" style="width: 28px; height: 28px; flex-shrink: 0;">3</div>
+                    <div>
+                      <strong>Check your Status</strong>
+                      <p class="text-muted small mb-0">Go to the <strong>My Leave</strong> tab to see your remaining balance. Once your manager approves or rejects your leave, you will see a "Manager Note" appear next to the status.</p>
+                    </div>
+                  </div>
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- About Me (Developer Bio) -->
+          <div class="col-lg-5">
+            <div class="card border-0 shadow-sm p-4 h-100 bg-white text-center">
+              <!-- Replace with your actual photo or a cool avatar -->
+              <div class="bg-primary text-white rounded-circle d-inline-flex justify-content-center align-items-center mb-3 shadow" style="width: 80px; height: 80px; font-size: 2rem; font-weight: bold; background: linear-gradient(135deg, #2563eb, #06b6d4) !important;">
+                S
+              </div>
+              <h5 class="fw-bold mb-1">Surya</h5>
+              <p class="text-primary fw-semibold small mb-3">Full Stack Developer</p>
+              <p class="text-muted small mb-4">
+                "I built Symplyve to solve the headache of tracking team availability. What started as a simple Google Sheet evolved into this elite, serverless dashboard. I love building tools that make teams more efficient."
+              </p>
+              <div class="d-flex justify-content-center gap-3">
+                <a href="https://github.com/suryasticsai" target="_blank" class="text-muted fs-4"><i class="bi bi-github"></i></a>
+                <a href="#" target="_blank" class="text-muted fs-4"><i class="bi bi-linkedin"></i></a>
+                <a href="#" target="_blank" class="text-muted fs-4"><i class="bi bi-twitter-x"></i></a>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- VIEW: MY LEAVE -->
@@ -168,7 +230,6 @@
           <div class="card-header bg-white d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
             <h5 class="m-0 text-primary"><i class="bi bi-person-badge me-2"></i>My Leave Dashboard</h5>
 
-            <!-- Admin can look at anyone -->
             <div class="d-flex align-items-center gap-2" v-if="isAdmin">
               <label class="fw-semibold small text-muted mb-0">Viewing:</label>
               <select class="form-select form-select-sm fw-bold" v-model="targetEmployeeId" @change="updateURL()" style="width: auto; min-width: 200px;">
@@ -179,7 +240,6 @@
           </div>
 
           <div class="row g-0" v-if="targetEmployee">
-            <!-- Left: info + balances -->
             <div class="col-md-4 border-end p-4 text-center">
               <div class="stat-icon blue mx-auto mb-3" style="width:64px;height:64px;font-size:2rem;"><i class="bi bi-person-badge-fill"></i></div>
               <h4 class="fw-bold mb-1">{{ targetEmployee.name }}</h4>
@@ -202,7 +262,6 @@
               <p class="text-muted small mt-3 mb-0">Annual leave, {{ new Date().getFullYear() }}</p>
             </div>
 
-            <!-- Right: history -->
             <div class="col-md-8 p-4 bg-light" style="border-radius: 0 0 16px 0;">
               <h6 class="fw-bold mb-3">Leave History</h6>
               <div class="table-responsive">
@@ -270,10 +329,8 @@
             </div>
           </div>
 
-          <!-- FullCalendar -->
           <div v-show="currentView === 'calendar'" style="min-height: 600px; padding: 1rem;" id="calendar" ref="calendarEl"></div>
 
-          <!-- Gantt timeline -->
           <div v-show="currentView === 'timeline'" class="timeline-scroll-area">
             <div class="grid-header" :style="{ gridTemplateColumns: `220px repeat(${days.length}, minmax(40px, 1fr))` }">
               <div class="col-emp">EMPLOYEE</div>
@@ -303,7 +360,6 @@
           </div>
         </div>
 
-        <!-- Side panels -->
         <div class="side-panel">
           <div class="card">
             <div class="card-header"><h5>Leave Balance</h5></div>
@@ -641,6 +697,24 @@
     </div>
   </div>
 
+  <!-- 6. Logout Confirmation Modal (NEW) -->
+  <div class="modal fade" id="logoutConfirmModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+      <div class="modal-content border-0 shadow-lg text-center" style="border-radius: 16px;">
+        <div class="modal-body p-4">
+          <i class="bi bi-box-arrow-right text-danger mb-3" style="font-size: 3rem;"></i>
+          <h5 class="fw-bold mb-2">Sign Out?</h5>
+          <p class="text-muted small mb-4">Are you sure you want to sign out? You will need your PIN to view your private leave details again.</p>
+          
+          <div class="d-grid gap-2">
+            <button class="btn btn-danger fw-bold" @click="logout">Yes, sign out</button>
+            <button class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- TOASTS & NOTIFICATIONS -->
   <div class="toast-container" id="toastContainer">
     <div v-for="toast in toasts" :key="toast.id" class="custom-toast" :class="toast.type">
@@ -669,7 +743,7 @@
     </div>
   </div>
 
-  <!-- DEBUG CONSOLE (open the page with ?debug) -->
+  <!-- DEBUG CONSOLE -->
   <div class="debug-console" :class="{ 'open': showDebug }" v-if="debugEnabled">
     <div class="debug-header">
       <div class="d-flex align-items-center gap-2">
