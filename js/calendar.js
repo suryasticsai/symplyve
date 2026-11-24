@@ -1,302 +1,316 @@
+const LEAVE_TYPES = {
+    annual:  { class: 'bg-annual',  fcClass: 'evt-annual',  label: 'Annual' },
+    sick:    { class: 'bg-sick',    fcClass: 'evt-sick',    label: 'Sick' },
+    casual:  { class: 'bg-casual',  fcClass: 'evt-casual',  label: 'Casual' },
+    unpaid:  { class: 'bg-unpaid',  fcClass: 'evt-unpaid',  label: 'Unpaid' },
+    wfh:     { class: 'bg-wfh',     fcClass: 'evt-wfh',     label: 'WFH' }
+};
+
+/** 'Annual Leave' -> 'annual', 'Work From Home' -> 'wfh'; matches the server. */
+function canonLeaveType(v) {
+    const s = String(v == null ? '' : v).trim().toLowerCase();
+    if (s.startsWith('annual')) return 'annual';
+    if (s.startsWith('sick')) return 'sick';
+    if (s.startsWith('casual')) return 'casual';
+    if (s.startsWith('work') || s === 'wfh') return 'wfh';
+    if (s.startsWith('unpaid')) return 'unpaid';
+    return s.split(' ')[0];
+}
+
 const calendarModule = {
     data() {
         return {
             employees: [],
             days: [],
             leaves: [],
-            isLoading: true, 
-            fetchError: null, // NEW: Holds error messages if fetch fails
+            isLoading: true,          // skeleton: first load only
+            isRefreshing: false,      // later reloads keep the screen (and the calendar) intact
+            initialized: false,
+            fetchError: '',
             searchQuery: '',
-            reportSearch: '', 
-            
+            reportSearch: '',
+
             currentView: 'calendar',
             fcCalendar: null,
             balanceChart: null,
-            
+
             months: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'],
             selectedMonth: new Date().getMonth(),
-            selectedYear: new Date().getFullYear().toString(),
-
-            outTodayList: [],
-            pendingRequests: [],
-            
-            currentUser: null
-        }
+            selectedYear: new Date().getFullYear()
+        };
     },
     computed: {
-        isAdmin() {
-            return !this.currentUser || this.currentUser.id === 'ADMIN';
+        yearOptions() {
+            const y = new Date().getFullYear();
+            return [y - 1, y, y + 1];
+        },
+        monthBounds() {
+            const y = Number(this.selectedYear), m = Number(this.selectedMonth);
+            const last = new Date(y, m + 1, 0).getDate();
+            const p = dateUtil.pad;
+            return { first: `${y}-${p(m + 1)}-01`, last: `${y}-${p(m + 1)}-${p(last)}` };
         },
         filteredEmployees() {
             if (!this.searchQuery) return this.employees;
             const q = this.searchQuery.toLowerCase();
-            return this.employees.filter(e => 
-                e.name.toLowerCase().includes(q) || e.id.toLowerCase().includes(q)
-            );
+            return this.employees.filter(e =>
+                e.name.toLowerCase().includes(q) || e.id.toLowerCase().includes(q));
+        },
+        outTodayList() {
+            const today = dateUtil.todayISO();
+            const out = [];
+            this.employees.forEach(emp => {
+                const l = this.leaves.find(x =>
+                    x.empId === emp.id && x.status === 'Approved' && x.startDate <= today && today <= x.endDate);
+                if (l) out.push({ id: emp.id, name: emp.name, type: l.label, employee: emp });
+            });
+            return out;
         },
         outTodayCount() { return this.outTodayList.length; },
+        pendingRequests() {
+            return this.leaves
+                .filter(l => l.status === 'Pending')
+                .map(l => ({
+                    id: l.id,
+                    emp: l.emp,
+                    label: l.label,
+                    dates: `${l.startDate} to ${l.endDate}`,
+                    days: l.days,
+                    reason: l.reason
+                }));
+        },
         pendingApprovalsCount() { return this.pendingRequests.length; },
+        utilization() {
+            const year = String(new Date().getFullYear());
+            const total = this.employees.reduce((s, e) => s + this.allowanceOf(e), 0);
+            if (!total) return 0;
+            const used = this.leaves
+                .filter(l => l.typeKey === 'annual' && l.status === 'Approved' && l.startDate.slice(0, 4) === year)
+                .reduce((s, l) => s + l.days, 0);
+            return Math.min(100, Math.round((used / total) * 100));
+        },
         filteredReports() {
-            let filtered = this.leaves;
+            let list = this.leaves;
             if (this.reportSearch) {
                 const q = this.reportSearch.toLowerCase();
-                filtered = filtered.filter(l => 
-                    l.emp.toLowerCase().includes(q) || 
-                    l.label.toLowerCase().includes(q) || 
-                    l.status.toLowerCase().includes(q)
-                );
+                list = list.filter(l =>
+                    l.emp.toLowerCase().includes(q) || l.label.toLowerCase().includes(q) || l.status.toLowerCase().includes(q));
             }
-            return [...filtered].sort((a, b) => new Date(b.startDate) - new Date(a.startDate));
+            return [...list].sort((a, b) => (a.startDate < b.startDate ? 1 : -1));
         }
     },
     methods: {
-        async loadData() {
-            const isFirstLoad = this.employees.length === 0;
-            if (isFirstLoad) this.isLoading = true;
-            this.fetchError = null;
-
-            // FAILSAFE: Stop loading after 10 seconds no matter what
-            const failsafeTimer = setTimeout(() => {
-                if (this.isLoading) {
-                    this.isLoading = false;
-                    this.fetchError = "Connection timed out. Ensure Google Apps Script is deployed as 'Anyone' and the URL in config.js is correct.";
-                }
-            }, 10000);
+        async loadData(opts = {}) {
+            const silent = !!opts.silent && this.initialized;
+            if (silent) this.isRefreshing = true; else this.isLoading = true;
+            this.fetchError = '';
 
             try {
-                const [empData, leaveData] = await Promise.all([
-                    this.fetchEmployeesFromSheet(),
-                    this.fetchLeavesFromSheet()
+                const [emps, lvs] = await Promise.all([
+                    this.api('getEmployees', {}, { auth: true }),
+                    this.api('getLeaves', {}, { auth: true })
                 ]);
 
-                // Check if GAS returned an error object instead of an array
-                if (!Array.isArray(empData)) throw new Error(empData.error || "Invalid response from API. Did you run setupDatabase()?");
-                if (!Array.isArray(leaveData)) throw new Error(leaveData.error || "Invalid response from API.");
+                // Saved session was rejected by the server: it has been cleared, so retry once as a visitor.
+                if (!opts._retried && [emps, lvs].some(r => r && !Array.isArray(r) && r.code === 'AUTH')) {
+                    return await this.loadData({ ...opts, _retried: true });
+                }
+                if (!Array.isArray(emps)) throw new Error((emps && emps.error) || 'Could not load employees.');
+                if (!Array.isArray(lvs)) throw new Error((lvs && lvs.error) || 'Could not load leave data.');
 
-                this.employees = empData.map(e => ({ 
-                    id: e.ID, name: e.Name, role: e.Role,
-                    department: e.Department, email: e.Email,
-                    totalAllowance: e.TotalAllowance, usedAllowance: e.UsedAllowance,
-                    hasPassword: e.hasPassword
+                this.employees = emps.filter(e => e && e.ID).map(e => ({
+                    id: String(e.ID),
+                    name: String(e.Name || ''),
+                    role: e.Role || '',
+                    department: e.Department || '',
+                    email: e.Email || '',
+                    totalAllowance: e.TotalAllowance,
+                    usedAllowance: e.UsedAllowance,
+                    hasPassword: !!e.hasPassword
                 }));
-                
-                const typeMap = {
-                    'annual': { class: 'bg-annual', label: 'Annual', fcClass: 'evt-annual' },
-                    'sick': { class: 'bg-sick', label: 'Sick', fcClass: 'evt-sick' },
-                    'casual': { class: 'bg-casual', label: 'Casual', fcClass: 'evt-casual' },
-                    'unpaid': { class: 'bg-unpaid', label: 'Unpaid', fcClass: 'evt-unpaid' },
-                    'wfh': { class: 'bg-wfh', label: 'WFH', fcClass: 'evt-wfh' }
-                };
 
-                this.leaves = leaveData.map(row => {
-                    if (!row.StartDate || !row.EndDate) return null;
-                    const typeInfo = typeMap[row.Type.toLowerCase()] || { class: 'bg-annual', label: row.Type, fcClass: 'evt-annual' };
-                    
-                    return { 
-                        id: row.ID, emp: row.EmployeeName, 
-                        startDate: row.StartDate, endDate: row.EndDate,
-                        typeClass: typeInfo.class, fcClass: typeInfo.fcClass,
-                        label: typeInfo.label, status: row.Status,
+                this.leaves = lvs.map(row => {
+                    const startDate = String(row.StartDate || '').slice(0, 10);
+                    const endDate = String(row.EndDate || '').slice(0, 10);
+                    if (!dateUtil.isISO(startDate) || !dateUtil.isISO(endDate) || endDate < startDate) return null;
+
+                    const key = canonLeaveType(row.Type);
+                    const raw = String(row.Type || 'Leave');
+                    const info = LEAVE_TYPES[key] ||
+                        { class: 'bg-annual', fcClass: 'evt-annual', label: raw.charAt(0).toUpperCase() + raw.slice(1) };
+
+                    return {
+                        id: String(row.ID),
+                        empId: String(row.EmployeeID),
+                        emp: String(row.EmployeeName || ''),
+                        startDate, endDate,
+                        days: dateUtil.days(startDate, endDate),
+                        typeKey: key,
+                        typeClass: info.class,
+                        fcClass: info.fcClass,
+                        label: info.label,
+                        status: String(row.Status || 'Pending'),
                         reason: row.Reason || '',
                         adminComment: row.AdminComment || ''
                     };
                 }).filter(Boolean);
 
-                this.generateDays(); 
-                this.processSidePanels();
-                
-                if (isFirstLoad) {
-                    const urlParams = new URLSearchParams(window.location.search);
-                    const empIdParam = urlParams.get('empId');
-                    
-                    if (empIdParam) {
-                        const foundEmp = this.employees.find(e => e.id === empIdParam);
-                        if (foundEmp) {
-                            this.currentUser = foundEmp;
-                            this.targetEmployee = foundEmp;
-                            this.activeTab = 'myleave';
-                        }
-                    } else {
-                        this.currentUser = { id: 'ADMIN', name: 'Admin' };
-                        if(this.employees.length > 0) this.targetEmployee = this.employees[0];
-                    }
+                // Whose "My Leave" page is shown
+                if (!this.session) {
+                    this.targetEmployeeId = '';
+                } else if (!this.isAdmin) {
+                    this.targetEmployeeId = this.session.user.id;
+                } else if (!this.employees.some(e => e.id === this.targetEmployeeId)) {
+                    this.targetEmployeeId = this.employees.length ? this.employees[0].id : '';
                 }
-                
+
+                this.generateDays();
+                this.initialized = true;
                 this.$nextTick(() => {
                     this.renderFullCalendar();
+                    this.renderChart();
                 });
-                this.renderChart();
-
             } catch (error) {
-                console.error("Fetch Error:", error);
-                this.fetchError = error.message || "Failed to fetch data. Check console for details.";
+                console.error('Load error: ' + error.message);
+                this.fetchError = error.message || 'Could not load data.';
             } finally {
-                clearTimeout(failsafeTimer);
                 this.isLoading = false;
+                this.isRefreshing = false;
             }
         },
+
         generateDays() {
-            this.days = [];
-            const year = parseInt(this.selectedYear);
-            const month = parseInt(this.selectedMonth);
+            const year = Number(this.selectedYear);
+            const month = Number(this.selectedMonth);
             const daysInMonth = new Date(year, month + 1, 0).getDate();
             const dayNames = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
             const today = new Date();
 
+            this.days = [];
             for (let i = 1; i <= daysInMonth; i++) {
-                const dateObj = new Date(year, month, i);
-                const dayOfWeek = dateObj.getDay(); 
-                
+                const dow = new Date(year, month, i).getDay();
                 this.days.push({
-                    date: i, 
-                    dayName: dayNames[dayOfWeek],
-                    isWeekend: dayOfWeek === 0 || dayOfWeek === 6,
+                    date: i,
+                    dayName: dayNames[dow],
+                    isWeekend: dow === 0 || dow === 6,
                     isToday: i === today.getDate() && month === today.getMonth() && year === today.getFullYear()
                 });
             }
         },
-        processSidePanels() {
-            const today = new Date();
-            today.setHours(0,0,0,0);
-            
-            this.outTodayList = [];
-            this.employees.forEach(emp => {
-                const activeLeave = this.leaves.find(l => {
-                    if (l.emp !== emp.name || l.status !== 'Approved') return false;
-                    const s = new Date(l.startDate);
-                    const e = new Date(l.endDate);
-                    return today >= s && today <= e;
-                });
-                if (activeLeave) this.outTodayList.push({ name: emp.name, type: activeLeave.label });
-            });
 
-            this.pendingRequests = this.leaves
-                .filter(l => l.status === 'Pending')
-                .map(l => ({ 
-                    id: l.id, 
-                    emp: l.emp, 
-                    dates: `${l.startDate} to ${l.endDate}`,
-                    reason: l.reason
-                }));
-        },
-        getLeavesForEmp(empName) {
-            return this.leaves.filter(l => l.emp === empName);
-        },
-        calculateBarStyle(leave) {
-            const start = new Date(leave.startDate);
-            const end = new Date(leave.endDate);
-            
-            const firstOfMonth = new Date(start.getFullYear(), start.getMonth(), 1);
-            const lastOfMonth = new Date(start.getFullYear(), start.getMonth() + 1, 0);
-            const totalDays = lastOfMonth.getDate();
-
-            let startDay = start.getMonth() === firstOfMonth.getMonth() ? start.getDate() : 1;
-            let endDay = end.getMonth() === firstOfMonth.getMonth() ? end.getDate() : totalDays;
-
-            const startPct = ((startDay - 1) / totalDays) * 100;
-            const widthPct = ((endDay - startDay + 1) / totalDays) * 100;
-            
-            return {
-                left: `calc(220px + (100% - 220px) * ${startPct / 100})`,
-                width: `calc((100% - 220px) * ${widthPct / 100} - 4px)` 
-            };
-        },
-        renderFullCalendar() {
-            const calendarEl = this.$refs.calendarEl;
-            if (!calendarEl) return;
-
-            try {
-                if (typeof FullCalendar === 'undefined') return;
-
-                const events = this.leaves.filter(l => l.status !== 'Rejected').map(l => {
-                    const end = new Date(l.endDate);
-                    end.setDate(end.getDate() + 1);
-                    
+        /** Gantt bars for one employee, clipped to the month being shown. */
+        barsForEmp(emp) {
+            const b = this.monthBounds;
+            const total = this.days.length || 1;
+            return this.leaves
+                .filter(l => l.empId === emp.id && l.status !== 'Rejected' && l.startDate <= b.last && l.endDate >= b.first)
+                .map(l => {
+                    const s = l.startDate > b.first ? l.startDate : b.first;
+                    const e = l.endDate < b.last ? l.endDate : b.last;
+                    const startIdx = Number(s.slice(8, 10)) - 1;
+                    const len = Number(e.slice(8, 10)) - startIdx;
+                    const pending = l.status === 'Pending';
                     return {
-                        title: `${l.emp.split(' ')[0]} · ${l.label}`,
-                        start: l.startDate,
-                        end: end.toISOString().split('T')[0],
-                        className: l.fcClass
+                        id: l.id,
+                        label: l.label + (pending ? ' · pending' : ''),
+                        typeClass: l.typeClass,
+                        style: {
+                            left: `calc(220px + (100% - 220px) * ${startIdx / total})`,
+                            width: `calc((100% - 220px) * ${len / total} - 4px)`,
+                            opacity: pending ? 0.65 : 1
+                        }
                     };
                 });
+        },
+
+        renderFullCalendar() {
+            const el = this.$refs.calendarEl;
+            if (!el || typeof FullCalendar === 'undefined') return;
+
+            try {
+                const events = this.leaves
+                    .filter(l => l.status !== 'Rejected')
+                    .map(l => ({
+                        title: `${l.emp.split(' ')[0]} · ${l.label}${l.status === 'Pending' ? ' (pending)' : ''}`,
+                        start: l.startDate,
+                        end: dateUtil.addDays(l.endDate, 1),        // FullCalendar's end date is exclusive
+                        classNames: [l.fcClass, l.status === 'Pending' ? 'evt-pending' : '']
+                    }));
 
                 if (this.fcCalendar) {
-                    this.fcCalendar.removeAllEvents();
+                    this.fcCalendar.removeAllEventSources();
                     this.fcCalendar.addEventSource(events);
-                } else {
-                    this.fcCalendar = new FullCalendar.Calendar(calendarEl, {
-                        initialView: 'dayGridMonth',
-                        initialDate: `${this.selectedYear}-${String(this.selectedMonth + 1).padStart(2, '0')}-01`,
-                        headerToolbar: { left: 'prev,next', center: 'title', right: '' },
-                        height: '100%',
-                        events: events,
-                        dayMaxEvents: 3,
-                        dateClick: (info) => {
-                            this.newLeave.startDate = info.dateStr;
-                            this.newLeave.endDate = info.dateStr;
-                            this.selectedEmployee = this.isAdmin ? this.employees[0] : this.currentUser;
-                            this.openLeaveModal();
-                        }
-                    });
-                    this.fcCalendar.render();
+                    return;
                 }
+
+                const cal = new FullCalendar.Calendar(el, {
+                    initialView: 'dayGridMonth',
+                    initialDate: `${this.selectedYear}-${dateUtil.pad(Number(this.selectedMonth) + 1)}-01`,
+                    headerToolbar: { left: 'prev,next', center: 'title', right: '' },
+                    height: 'auto',
+                    events: events,
+                    dayMaxEvents: 3,
+                    dateClick: (info) => {
+                        this.openLeaveModal({ startDate: info.dateStr, endDate: info.dateStr });
+                    },
+                    datesSet: (info) => {
+                        // Keep the month/year pickers (and the Gantt view) in step with prev/next.
+                        const mid = info.view.currentStart;
+                        if (mid.getMonth() !== Number(this.selectedMonth) || mid.getFullYear() !== Number(this.selectedYear)) {
+                            this.selectedMonth = mid.getMonth();
+                            this.selectedYear = mid.getFullYear();
+                            this.generateDays();
+                        }
+                    }
+                });
+                cal.render();
+                this.fcCalendar = Vue.markRaw(cal);   // keep FullCalendar out of Vue's reactivity
             } catch (error) {
-                console.error("Calendar Error:", error.message);
+                console.error('Calendar error: ' + error.message);
             }
         },
+
         switchView(view) {
             this.currentView = view;
             if (view === 'calendar' && this.fcCalendar) {
                 setTimeout(() => this.fcCalendar.updateSize(), 50);
             }
         },
+
         updateCalendarDate() {
-            this.generateDays(); 
+            this.generateDays();
             if (this.fcCalendar) {
-                const dateStr = `${this.selectedYear}-${String(this.selectedMonth + 1).padStart(2, '0')}-01`;
-                this.fcCalendar.gotoDate(dateStr);
+                this.fcCalendar.gotoDate(`${this.selectedYear}-${dateUtil.pad(Number(this.selectedMonth) + 1)}-01`);
             }
         },
+
         renderChart() {
-            const chartEl = this.$refs.chartEl;
-            if (!chartEl) return;
-            
-            let counts = { annual: 0, sick: 0, casual: 0, wfh: 0 };
+            const el = this.$refs.chartEl;
+            if (!el || typeof Chart === 'undefined') return;
+
+            const keys = ['annual', 'sick', 'casual', 'wfh'];
+            const counts = { annual: 0, sick: 0, casual: 0, wfh: 0 };
             this.leaves.forEach(l => {
-                const key = l.typeClass.replace('bg-', '');
-                if (counts[key] !== undefined) {
-                    const s = new Date(l.startDate);
-                    const e = new Date(l.endDate);
-                    const days = Math.ceil((e - s) / (1000 * 60 * 60 * 24)) + 1;
-                    counts[key] += days;
-                }
+                if (l.status !== 'Rejected' && counts[l.typeKey] !== undefined) counts[l.typeKey] += l.days;
             });
 
             if (this.balanceChart) this.balanceChart.destroy();
-
-            this.balanceChart = new Chart(chartEl, {
+            this.balanceChart = Vue.markRaw(new Chart(el, {
                 type: 'doughnut',
                 data: {
                     labels: ['Annual', 'Sick', 'Casual', 'WFH'],
                     datasets: [{
-                        data: [counts.annual, counts.sick, counts.casual, counts.wfh],
+                        data: keys.map(k => counts[k]),
                         backgroundColor: ['#3b82f6', '#f59e0b', '#8b5cf6', '#06b6d4'],
-                        borderWidth: 0, 
+                        borderWidth: 0,
                         hoverOffset: 6
                     }]
                 },
                 options: {
-                    responsive: true, 
-                    maintainAspectRatio: false, 
-                    cutout: '68%',
-                    plugins: { 
-                        legend: { 
-                            position: 'bottom', 
-                            labels: { boxWidth: 12, padding: 14, font: { size: 11, weight: 600 } } 
-                        } 
-                    }
+                    responsive: true, maintainAspectRatio: false, cutout: '68%',
+                    plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 14, font: { size: 11, weight: 600 } } } }
                 }
-            });
+            }));
         }
     }
 };
