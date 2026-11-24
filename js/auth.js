@@ -16,7 +16,8 @@ const authModule = {
             loginError: '',
             loginNotice: '',
             isLoggingIn: false,
-            afterLogin: null
+            afterLogin: null,
+            logoutModalObj: null      // <--- ADDED
         };
     },
     computed: {
@@ -80,6 +81,14 @@ const authModule = {
             this.modal('loginModal').show();
         },
 
+        // <--- ADDED: Triggers the Logout Confirmation Modal
+        showLogoutConfirm() {
+            if (!this.logoutModalObj) {
+                this.logoutModalObj = new bootstrap.Modal(document.getElementById('logoutConfirmModal'));
+            }
+            this.logoutModalObj.show();
+        },
+
         async attemptLogin() {
             if (this.isLoggingIn) return;
             const id = this.loginAs;
@@ -129,6 +138,11 @@ const authModule = {
         },
 
         async logout() {
+            // <--- ADDED: Close the modal if it's open
+            if (this.logoutModalObj) {
+                this.logoutModalObj.hide();
+            }
+            
             try { await this.api('logout', {}, { auth: true }); } catch (e) { /* best effort */ }
             this.clearSession(false);
             await this.loadData({ silent: true });
