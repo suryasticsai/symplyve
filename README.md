@@ -54,9 +54,8 @@ Symplyve operates on a modern, serverless stack:
 To get your own instance of Symplyve running:
 
 1. **Clone the Repository:**
-   ```bash
+   ```
    git clone https://github.com/suryasticsai/symplyve.git
-```
 
 2. Set up Google Sheets:
    · Create a new Google Sheet.
