@@ -2,7 +2,7 @@
   <img src="symplyve-logo1.png" alt="Symplyve Logo" width="150" style="border-radius: 20px; margin-bottom: 20px;" />
   
   <h1>Symplyve</h1>
-  <p><strong>Elite Leave Management & Employee Dashboard</strong></p>
+  <p><strong>CPMS Leave Management & Employee Dashboard</strong></p>
 
   <!-- Dynamic Scrolling Text -->
   <a href="https://git.io/typing-svg">
@@ -100,5 +100,5 @@ To get your own instance of Symplyve running:
 ---
 
 <div align="center">
-  <p>Symplyve &copy; 2026. Built for elite teams.</p>
+  <p>Symplyve &copy; 2026. Built for CPMS teams.</p>
 </div>
