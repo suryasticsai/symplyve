@@ -1,10 +1,3 @@
-Here is the ultimate, highly professional README.md file.
-
-It features a dynamic typing scroller, beautiful shield badges for your tech stack, a clear architecture explanation, and a polished author section with your GitHub avatar and social links.
-
-Create a file named README.md in the root of your repository and paste this in:
-
-```markdown
 <div align="center">
   <img src="symplyve-logo1.png" alt="Symplyve Logo" width="150" style="border-radius: 20px; margin-bottom: 20px;" />
   
