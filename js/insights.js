@@ -18,6 +18,10 @@ const ASK_MONTHS = {
 };
 const ASK_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const ASK_MON = '(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)';
+const ASK_STOP = new Set(('the a an of to in on at for and or is are was were be been do does did have has had we our you your i me my it its this that these those ' +
+    'who whom what which when where why how many much any all with from by as about than then so if not no can could should would will shall tell show give list please ' +
+    'there their they them he she his her leave leaves day days employee employees').split(' '));
+const ASK_NOT_A_NAME = /\b(leave|leaves|pending|request|requests|sick|annual|casual|wfh|unpaid|anyone|everyone|anybody|people|employees|members|today|tomorrow|yesterday|week|month|year|balance|approval|approvals|policy|holiday|holidays)\b/;
 const ASK_RE = {
     iso: /\b(\d{4})-(\d{2})-(\d{2})\b/,
     slash: /\b(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})\b/,
@@ -58,7 +62,7 @@ const insightsModule = {
                 if (local) {
                     Object.assign(entry, local, { source: 'table' });
                 } else {
-                    Object.assign(entry, await this.answerWithAI(q), { source: 'ai' });
+                    Object.assign(entry, { source: 'ai' }, await this.answerWithAI(q));
                 }
             } catch (e) {
                 entry.a = e.message || 'Something went wrong. Please try again.';
@@ -132,6 +136,79 @@ const insightsModule = {
             return null;
         },
 
+        /* ------------------------------ team lookups ------------------------------ */
+        askLev(a, b) {
+            const m = a.length, n = b.length;
+            if (!m) return n;
+            if (!n) return m;
+            let prev = Array.from({ length: n + 1 }, (_, j) => j);
+            for (let i = 1; i <= m; i++) {
+                const cur = [i];
+                for (let j = 1; j <= n; j++) {
+                    cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+                }
+                prev = cur;
+            }
+            return prev[n];
+        },
+
+        /** People whose name matches a typed name: exact, starts-with, or a close spelling. */
+        askFindPeople(term) {
+            const t = term.toLowerCase().replace(/[^a-z .'-]/g, '').trim();
+            if (!t) return { exact: [], close: [] };
+            const exact = this.employees.filter(e => {
+                const n = e.name.toLowerCase();
+                if (/\s/.test(t)) return n.includes(t);                         // "prashant kumar"
+                return n.split(/\s+/).some(w => w === t || (t.length >= 3 && w.startsWith(t)));   // from the start of a word only
+            });
+            if (exact.length) return { exact, close: [] };
+            const close = this.employees
+                .map(e => {
+                    const best = Math.min(...e.name.toLowerCase().split(/\s+/).map(w => this.askLev(w, t.split(/\s+/)[0])));
+                    return { e, d: best };
+                })
+                .filter(x => x.d <= (t.length >= 8 ? 3 : 2))
+                .sort((a, b) => a.d - b.d)
+                .map(x => x.e);
+            return { exact: [], close };
+        },
+
+        askTeamLookup(text) {
+            // roster questions
+            if (/\bhow many (people|members|employees|persons)\b.*\b(team|company|org|have|are there)\b|\bteam size\b|\b(list|show)\b.*\b(team|employees|members|roster)\b|\bwho (is|are) (in|on) (the|our) team\b|\bteam members\b/.test(text)) {
+                return {
+                    a: `There ${this.employees.length === 1 ? 'is 1 person' : 'are ' + this.employees.length + ' people'} in the team.`,
+                    table: { cols: ['ID', 'Name', 'Role', 'Department'], rows: this.employees.slice(0, 100).map(e => [e.id, e.name, e.role || '-', e.department || '-']) }
+                };
+            }
+
+            // "do we have X in the team", "is X in the team", "is there a X"
+            let m = /\b(?:do we have|have we got|is there|are there|is|do we know|does the team have)\s+(?:an?\s+|any\s+|anyone\s+(?:named|called)\s+|someone\s+(?:named|called)\s+)?([a-z][a-z .'-]{1,40}?)\s*(?:in|on|within|part of)?\s*(?:the |our |this |my )?(?:team|company|org|organisation|organization|roster|list|directory)\b/.exec(text);
+            if (!m) m = /^(?:do we have|have we got|is there|are there)\s+(?:an?\s+|any\s+)?([a-z][a-z .'-]{1,40})$/.exec(text);
+            if (!m) return null;
+
+            const term = m[1].trim();
+            if (ASK_NOT_A_NAME.test(term) || ASK_STOP.has(term)) return null;
+
+            const { exact, close } = this.askFindPeople(term);
+            const shown = term.replace(/\b\w/g, c => c.toUpperCase());
+            if (exact.length) {
+                return {
+                    a: exact.length === 1
+                        ? `Yes. ${exact[0].name} (${exact[0].id}) is in the team${exact[0].role ? ' as ' + exact[0].role : ''}${exact[0].department ? ', ' + exact[0].department : ''}.`
+                        : `Yes. ${exact.length} people match "${shown}": ${exact.map(e => e.name).join(', ')}.`,
+                    table: { cols: ['ID', 'Name', 'Role', 'Department'], rows: exact.map(e => [e.id, e.name, e.role || '-', e.department || '-']) }
+                };
+            }
+            if (close.length) {
+                return {
+                    a: `No one named "${shown}" is in the team. Did you mean ${close.slice(0, 3).map(e => e.name).join(' or ')}?`,
+                    table: null
+                };
+            }
+            return { a: `No. There is nobody named "${shown}" in the team table (${this.employees.length} people).`, table: null };
+        },
+
         /** ' on 31 Jan 2026', ' in March 2026', ' today (25 Nov 2026)' */
         askWhen(r) {
             if (!r) return '';
@@ -150,6 +227,10 @@ const insightsModule = {
         answerLocally(question) {
             const text = question.toLowerCase().replace(/[?!]+$/g, '').trim();
             const wants = re => re.test(text);
+
+            // 0) Team lookups: "Do we have Prashant in the team?", "How many people are in the team?"
+            const lookup = this.askTeamLookup(text);
+            if (lookup) return lookup;
 
             // Which statuses count. Default: approved leave only.
             let statuses = ['Approved'], explicit = false;
@@ -236,7 +317,7 @@ const insightsModule = {
 
             // 3) Who is on leave in a period / who has pending requests / who took a type of leave
             if (!person && (range || explicit || typeKey) &&
-                wants(/\bwho\b|\bwhich\b|anyone|anybody|everyone|\blist\b|\bshow\b|how many|\bcount\b|\bout\b|\boff\b|on leave|absent/)) {
+                wants(/\bwho\b|\bwhich\b|anyone|anybody|everyone|\blist\b|\bshow\b|how many|\bcount\b|\bout\b|\boff\b|on leave|absent|do we have|are there|is there/)) {
                 const items = [...pool].sort((a, b) => (a.startDate < b.startDate ? -1 : 1));
                 const names = [...new Set(items.map(l => l.emp))];
                 if (!items.length) return { a: `Nobody has ${statusWord}${typeWord} leave${when || ' recorded'}.${assumed}`, table: null };
@@ -258,70 +339,156 @@ const insightsModule = {
             return null;   // not something the table can answer exactly: hand over to the AI
         },
 
-        /* ------------------------------ AI for everything else ------------------------------ */
-        askContext() {
-            const rows = this.leaves
-                .filter(l => l.status !== 'Rejected')
-                .sort((a, b) => (a.startDate < b.startDate ? -1 : 1))
-                .slice(-400)
-                .map(l => [l.emp, l.label, l.startDate, l.endDate, l.days, l.status].join(','));
-            const totals = this.employees.map(e => {
-                const days = this.leaves.filter(l => l.empId === e.id && l.status === 'Approved').reduce((s, l) => s + l.days, 0);
-                return `${e.name}: ${days}`;
+        /* ------------------- RAG: retrieve the relevant records, then ask the AI ------------------- */
+
+        /** One chunk per employee (profile + their leave), plus one team summary chunk. */
+        askChunks() {
+            const today = dateUtil.todayISO();
+            const chunks = this.employees.map(e => {
+                const mine = this.leaves.filter(l => l.empId === e.id && l.status !== 'Rejected')
+                    .sort((a, b) => (a.startDate < b.startDate ? -1 : 1));
+                const used = this.calculateUsed(e);
+                const head = `Employee ${e.name} (${e.id}), ${e.role || 'no role'}, ${e.department || 'no department'}. ` +
+                    `Annual allowance ${this.allowanceOf(e)} days, used ${used}, left ${this.allowanceOf(e) - used}.`;
+                const lines = mine.map(l => `- ${l.label} leave ${l.startDate} to ${l.endDate} (${l.days} day${l.days === 1 ? '' : 's'}, ${l.status})`);
+                return { emp: e, rows: mine, text: [head, ...(lines.length ? lines : ['- no leave recorded'])].join('\n') };
             });
-            return [
-                `Today: ${dateUtil.todayISO()}`,
-                'Leave records (CSV columns: Employee,Type,Start,End,Days,Status):',
-                ...rows,
-                'Total approved leave days per employee:',
-                ...totals
-            ].join('\n');
+
+            const byType = {};
+            this.leaves.filter(l => l.status === 'Approved').forEach(l => { byType[l.label] = (byType[l.label] || 0) + l.days; });
+            const pending = this.leaves.filter(l => l.status === 'Pending');
+            chunks.push({
+                emp: null, rows: [],
+                text: [
+                    `Team summary as of ${today}: ${this.employees.length} people.`,
+                    `Out today: ${this.outTodayList.length ? this.outTodayList.map(o => `${o.name} (${o.type})`).join(', ') : 'nobody'}.`,
+                    `Pending requests: ${pending.length ? pending.map(l => `${l.emp} ${l.startDate} to ${l.endDate}`).join('; ') : 'none'}.`,
+                    `Approved days by type: ${Object.keys(byType).length ? Object.keys(byType).map(k => `${k} ${byType[k]}`).join(', ') : 'none'}.`
+                ].join('\n')
+            });
+            return chunks;
+        },
+
+        askTokens(s) {
+            return (String(s).toLowerCase().match(/[a-z0-9]+/g) || []).filter(t => t.length > 1 && !ASK_STOP.has(t));
+        },
+
+        /** TF-IDF style scoring, with boosts for names and for records that overlap a date in the question. */
+        askRetrieve(question, k = 6) {
+            const chunks = this.askChunks().filter(c => c.emp);        // the summary chunk is always included separately
+            const q = this.askTokens(question);
+            const range = this.askRange(question.toLowerCase());
+            const docs = chunks.map(c => this.askTokens(c.text));
+            const df = {};
+            docs.forEach(d => new Set(d).forEach(t => { df[t] = (df[t] || 0) + 1; }));
+            const N = chunks.length || 1;
+
+            const scored = chunks.map((c, i) => {
+                let score = 0;
+                const tf = {};
+                docs[i].forEach(t => { tf[t] = (tf[t] || 0) + 1; });
+                q.forEach(t => { if (tf[t]) score += (1 + Math.log(tf[t])) * Math.log(1 + N / (1 + (df[t] || 0))); });
+                const nameTokens = this.askTokens(c.emp.name);
+                q.forEach(t => { if (nameTokens.includes(t) || nameTokens.some(n => n.startsWith(t) && t.length >= 3)) score += 6; });
+                if (range) score += 3 * c.rows.filter(l => this.askOverlap(l, range) > 0).length;
+                return { c, score };
+            });
+            return scored.filter(x => x.score > 0).sort((a, b) => b.score - a.score).slice(0, k).map(x => x.c);
+        },
+
+        askPrompt(question, retrieved) {
+            const roster = this.employees.slice(0, 200).map(e => `${e.name} (${e.id}${e.role ? ', ' + e.role : ''})`).join('; ');
+            const named = retrieved.length > 0;
+            let table = '';
+            if (!named && this.leaves.length <= 200) {
+                table = '\n\nAll leave records (Employee,Type,Start,End,Days,Status):\n' + this.leaves
+                    .filter(l => l.status !== 'Rejected')
+                    .sort((a, b) => (a.startDate < b.startDate ? -1 : 1))
+                    .map(l => [l.emp, l.label, l.startDate, l.endDate, l.days, l.status].join(',')).join('\n');
+            }
+            const team = this.askChunks().pop().text;
+            const context = `Today is ${dateUtil.todayISO()}.\n\nTEAM ROSTER (${this.employees.length} people): ${roster}\n\n${team}` +
+                (named ? '\n\nMOST RELEVANT RECORDS:\n' + retrieved.map(c => c.text).join('\n\n') : '') + table;
+
+            return 'You are the assistant for a team leave-management app. Answer the question using ONLY the context below. ' +
+                'If the answer is not in the context, say you cannot tell from the data. Count carefully, quote exact dates and names, and keep the answer short.\n\n' +
+                'CONTEXT:\n' + context + '\n\nQUESTION: ' + question;
+        },
+
+        askCleanText(t) {
+            return String(t == null ? '' : t)
+                .replace(/^﻿/, '')
+                .replace(/�/g, '')
+                .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+                .trim();
+        },
+
+        /** POST { prompt } → { text }. Retries once; rejects garbled or empty replies. */
+        async askCallAI(prompt) {
+            const url = (typeof CONFIG !== 'undefined' && CONFIG.AI_URL) || 'https://ragina-crawler-ragina.vercel.app/api/ask';
+            let lastError;
+            for (let attempt = 1; attempt <= 2; attempt++) {
+                const ctrl = new AbortController();
+                const timer = setTimeout(() => ctrl.abort(), 40000);
+                try {
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ prompt }),
+                        signal: ctrl.signal
+                    });
+                    const raw = await res.text();
+                    if (!res.ok) {
+                        let msg = raw.slice(0, 200);
+                        try { const j = JSON.parse(raw); msg = j.error || j.message || msg; } catch (e) { /* not JSON */ }
+                        throw new Error(msg || `HTTP ${res.status}`);
+                    }
+
+                    let data = raw;
+                    try { data = JSON.parse(raw.replace(/^﻿/, '')); } catch (e) { /* plain text */ }
+                    if (data && typeof data === 'object' && data.error && !data.text) throw new Error(data.error);
+                    const text = typeof data === 'string' ? data : (data.text ?? data.answer ?? data.response ?? data.result ?? data.message ?? '');
+
+                    const str = String(text);
+                    const junk = (str.match(/[�\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g) || []).length;
+                    const clean = this.askCleanText(str);
+                    if (clean.length < 2 || junk / (str.length || 1) > 0.3) throw new Error('the AI returned an unreadable reply');
+                    return clean;
+                } catch (e) {
+                    lastError = e.name === 'AbortError' ? new Error('the AI took too long to answer') :
+                        (e && e.name === 'TypeError' ? new Error('could not reach the AI service (network or CORS)') : e);
+                    if (attempt < 2) await new Promise(r => setTimeout(r, 800));
+                } finally {
+                    clearTimeout(timer);
+                }
+            }
+            throw lastError;
         },
 
         async answerWithAI(question) {
-            const url = (typeof CONFIG !== 'undefined' && CONFIG.AI_URL) || 'https://ragina-crawler-ragina.vercel.app/api/ask';
-            const context = this.askContext();
-            const prompt =
-                'You answer questions about a team\'s leave records. Use ONLY the data below. ' +
-                'Count carefully, quote dates, and say "I can\'t tell from the data" if the answer is not in it. Keep the answer short.\n\n' +
-                'DATA:\n' + context + '\n\nQUESTION: ' + question;
-
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 40000);
-            let res;
+            const retrieved = this.askRetrieve(question);
+            const prompt = this.askPrompt(question, retrieved);
             try {
-                res = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question: prompt, context })
-                });
+                const text = await this.askCallAI(prompt);
+                return { a: text, table: null, sources: retrieved.map(c => c.emp.name) };
             } catch (e) {
-                if (e.name === 'AbortError') throw new Error('The AI took too long to answer. Please try again.');
-                throw new Error('Could not reach the AI service. Check your connection, or that the service allows this website (CORS).');
-            } finally {
-                clearTimeout(timer);
+                // Graceful degradation: still show what retrieval found.
+                const rows = [];
+                retrieved.forEach(c => c.rows.forEach(l => rows.push([c.emp.name, l.label, `${l.startDate} to ${l.endDate}`, l.days, l.status])));
+                if (!rows.length && retrieved.length) {
+                    return {
+                        a: `The AI service did not answer (${e.message}). From the table:\n\n` + retrieved.slice(0, 3).map(c => c.text).join('\n\n'),
+                        table: null,
+                        source: 'fallback'
+                    };
+                }
+                if (!rows.length) throw new Error(`The AI service did not answer (${e.message}). Try again in a moment.`);
+                return {
+                    a: `The AI service did not answer (${e.message}). Here are the closest records from the table instead.`,
+                    table: { cols: ['Employee', 'Type', 'Dates', 'Days', 'Status'], rows: rows.slice(0, 30) },
+                    source: 'fallback'
+                };
             }
-
-            let body = await res.text();
-            let data = body;
-            try { data = JSON.parse(body); } catch (e) { /* plain text answer */ }
-            if (!res.ok) {
-                throw new Error((data && (data.error || data.message)) || `The AI service returned an error (${res.status}).`);
-            }
-
-            const pick = d => {
-                if (d == null) return '';
-                if (typeof d === 'string') return d;
-                const direct = d.answer ?? d.response ?? d.text ?? d.message ?? d.result ?? d.output;
-                if (typeof direct === 'string') return direct;
-                if (direct && typeof direct === 'object') return pick(direct);
-                if (d.data) return pick(d.data);
-                if (d.choices && d.choices[0]) return (d.choices[0].message && d.choices[0].message.content) || d.choices[0].text || '';
-                return '';
-            };
-            const answer = String(pick(data)).trim();
-            if (!answer) throw new Error('The AI service replied in a format this page does not recognise.');
-            return { a: answer, table: null };
         }
     }
 };
