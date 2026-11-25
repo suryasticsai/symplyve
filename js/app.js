@@ -38,6 +38,7 @@ const app = createApp({
             ...notificationModule.data(),
             ...calendarModule.data(),
             ...leaveModule.data(),
+            ...insightsModule.data(),
             ...authModule.data()
         };
     },
@@ -52,6 +53,7 @@ const app = createApp({
         ...apiModule.methods,
         ...calendarModule.methods,
         ...leaveModule.methods,
+        ...insightsModule.methods,
         ...authModule.methods,
 
         toggleDebug() { this.showDebug = !this.showDebug; },
