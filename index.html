@@ -20,13 +20,8 @@
     @keyframes sk-shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
     .refresh-bar { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 2000; background: linear-gradient(90deg, #2563eb, #06b6d4, #2563eb); background-size: 200% 100%; animation: sk-shimmer 1s linear infinite; }
     .evt-pending { opacity: .65; }
-    
-    /* Welcome Page Enhancements */
-    .feature-card { cursor: pointer; transition: all 0.2s; border-radius: 16px; }
-    .feature-card:hover { transform: translateY(-5px); box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1) !important; }
-    .step-circle { width: 32px; height: 32px; flex-shrink: 0; }
   </style>
-  <link rel="stylesheet" href="css/style.css?v=5">
+  <link rel="stylesheet" href="css/style.css?v=6">
 </head>
 <body>
 
@@ -36,7 +31,7 @@
   <!-- ===== HEADER ===== -->
   <header class="top-header">
     <a href="#" class="brand" @click.prevent="activeTab = 'welcome'">
-      <img src="symplyve-logo1.png" alt="Symplyve" style="max-height: 36px; width: auto; object-fit: contain;" onerror="this.style.display='none'">
+      <img src="simplyve-logo.png" alt="Symplyve" style="max-height: 36px; width: auto; object-fit: contain;" onerror="this.style.display='none'">
       <span class="brand-name">Symplyve</span>
     </a>
 
@@ -58,8 +53,7 @@
           </div>
           <span style="font-weight:600;font-size:0.875rem;">{{ isAdmin ? 'Admin' : currentUser.name }}</span>
         </div>
-        <!-- Updated: Triggers the Logout Confirmation Modal -->
-        <button class="btn btn-sm btn-outline-danger ms-2" @click="showLogoutConfirm" title="Sign out">
+        <button class="btn btn-sm btn-outline-danger ms-2" @click="logout" title="Sign out">
           <i class="bi bi-box-arrow-right"></i>
         </button>
       </template>
@@ -84,6 +78,9 @@
       Approvals <span class="nav-badge">{{ pendingApprovalsCount }}</span>
     </a>
     <a href="#" class="nav-link" :class="{ active: activeTab === 'reports' }" @click.prevent="activeTab = 'reports'" v-if="isAdmin">Reports</a>
+    <a href="#" class="nav-link" :class="{ active: activeTab === 'ask' }" @click.prevent="activeTab = 'ask'"><i class="bi bi-stars me-1"></i>Ask AI</a>
+    <a href="#" class="nav-link" :class="{ active: activeTab === 'howto' }" @click.prevent="activeTab = 'howto'">How to Use</a>
+    <a href="#" class="nav-link" :class="{ active: activeTab === 'about' }" @click.prevent="activeTab = 'about'">About</a>
   </nav>
 
   <!-- ===== MAIN CONTENT ===== -->
@@ -130,12 +127,10 @@
         </div>
       </div>
 
-      <!-- VIEW: WELCOME (Updated with Context & About) -->
-      <div v-show="activeTab === 'welcome'" class="welcome-container py-4">
-        <div class="text-center mb-5">
-          <h1 class="fw-bold mb-3" style="font-family: 'Outfit';">Welcome to <span class="text-primary">Symplyve</span></h1>
-          <p class="text-muted" style="max-width: 600px; margin: 0 auto;">The elite leave management platform for high-performing teams. Easily track time off, manage approvals, and view team availability.</p>
-        </div>
+      <!-- VIEW: WELCOME -->
+      <div v-show="activeTab === 'welcome'" class="welcome-container text-center py-4">
+        <h1 class="fw-bold mb-3" style="font-family: 'Outfit';">Welcome to <span class="text-primary">Symplyve</span></h1>
+        <p class="text-muted mb-5" style="max-width: 600px; margin: 0 auto;">The elite leave management platform for high-performing teams. Easily track time off, manage approvals, and view team availability.</p>
 
         <div class="row g-4 justify-content-center mb-5">
           <div class="col-md-4">
@@ -160,57 +155,190 @@
             </div>
           </div>
         </div>
+      </div>
 
-        <!-- How to use & About Me -->
-        <div class="row g-4">
-          <!-- How to use -->
+      <!-- VIEW: ASK AI -->
+      <div v-show="activeTab === 'ask'">
+        <div class="card mb-4">
+          <div class="card-header bg-white">
+            <h5 class="m-0 text-primary"><i class="bi bi-stars me-2"></i>Ask the leave table</h5>
+          </div>
+          <div class="p-4">
+            <p class="text-muted small mb-3">Ask a question in plain English. Counts and dates are calculated exactly from the table; anything else is answered by AI.</p>
+
+            <form class="input-group input-group-lg mb-3" @submit.prevent="askSubmit">
+              <input type="text" class="form-control" v-model="askQuestion" maxlength="300" autocomplete="off"
+                     placeholder="e.g. Who took the most leaves? Who is on leave on Jan 31?">
+              <button type="submit" class="btn btn-primary px-4 fw-semibold" :disabled="askBusy || !askQuestion.trim()">
+                <span v-if="askBusy" class="spinner-border spinner-border-sm"></span>
+                <i v-else class="bi bi-send"></i>
+                <span class="d-none d-sm-inline ms-1">Ask</span>
+              </button>
+            </form>
+
+            <div class="d-flex flex-wrap gap-2 mb-4">
+              <button v-for="ex in askExamples" :key="ex" type="button" class="btn btn-sm btn-outline-secondary rounded-pill" @click="useExample(ex)" :disabled="askBusy">{{ ex }}</button>
+            </div>
+
+            <div v-if="askHistory.length === 0" class="text-center text-muted py-4">
+              <i class="bi bi-chat-square-text fs-1 d-block mb-2"></i>
+              Your answers will appear here.
+            </div>
+
+            <div v-for="item in askHistory" :key="item.id" class="border rounded-3 p-3 mb-3 bg-white shadow-sm">
+              <div class="fw-semibold mb-2"><i class="bi bi-person-circle text-primary me-2"></i>{{ item.q }}</div>
+
+              <div v-if="item.pending" class="text-muted small"><span class="spinner-border spinner-border-sm me-2"></span>Thinking...</div>
+              <template v-else>
+                <div :class="item.error ? 'text-danger' : ''" style="white-space: pre-line;">{{ item.a }}</div>
+
+                <div class="table-responsive mt-3" v-if="item.table && item.table.rows.length">
+                  <table class="table table-sm table-hover align-middle mb-0">
+                    <thead class="table-light"><tr><th v-for="c in item.table.cols" :key="c">{{ c }}</th></tr></thead>
+                    <tbody>
+                      <tr v-for="(row, i) in item.table.rows" :key="i"><td v-for="(cell, j) in row" :key="j">{{ cell }}</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div class="mt-2" v-if="!item.error">
+                  <span v-if="item.source === 'table'" class="badge bg-success-subtle text-success"><i class="bi bi-table me-1"></i>Calculated from the leave table</span>
+                  <span v-else class="badge bg-primary-subtle text-primary"><i class="bi bi-stars me-1"></i>Answered by AI. Double-check important numbers.</span>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIEW: HOW TO USE -->
+      <div v-show="activeTab === 'howto'">
+        <div class="text-center mb-4">
+          <h2 class="fw-bold" style="font-family: 'Outfit';">How to use Symplyve</h2>
+          <p class="text-muted mb-0">Everything you need in five minutes.</p>
+        </div>
+
+        <div class="row g-3 mb-4">
+          <div class="col-md-6 col-xl-4">
+            <div class="card h-100 p-4 border-0 shadow-sm">
+              <div class="fw-bold text-primary mb-2"><i class="bi bi-1-circle-fill me-2"></i>Sign in</div>
+              <p class="small text-muted mb-0">Click <strong>Sign in</strong>, pick your name and enter your PIN. The first time, you will be asked to create a <strong>4 to 6 digit PIN</strong>. Five wrong tries lock sign-in for 15 minutes.</p>
+            </div>
+          </div>
+          <div class="col-md-6 col-xl-4">
+            <div class="card h-100 p-4 border-0 shadow-sm">
+              <div class="fw-bold text-primary mb-2"><i class="bi bi-2-circle-fill me-2"></i>Apply for leave</div>
+              <p class="small text-muted mb-0">Click <strong>Apply Leave</strong>, or tap a date on the Team Calendar to start with that day filled in. Choose the type and dates, check the day counter, add a reason if you like, then <strong>Submit Request</strong>. You get a confirmation email.</p>
+            </div>
+          </div>
+          <div class="col-md-6 col-xl-4">
+            <div class="card h-100 p-4 border-0 shadow-sm">
+              <div class="fw-bold text-primary mb-2"><i class="bi bi-3-circle-fill me-2"></i>Track your request</div>
+              <p class="small text-muted mb-0">Open <strong>My Leave</strong> to see your balance and history. A request is <span class="badge bg-warning text-dark">Pending</span> until your manager decides, then <strong>Approved</strong> or <strong>Rejected</strong>, with an optional note. You are emailed either way.</p>
+            </div>
+          </div>
+          <div class="col-md-6 col-xl-4">
+            <div class="card h-100 p-4 border-0 shadow-sm">
+              <div class="fw-bold text-primary mb-2"><i class="bi bi-4-circle-fill me-2"></i>See who is out</div>
+              <p class="small text-muted mb-0"><strong>Team Calendar</strong> has a month view and a timeline. Faded bars are still pending. <strong>Who's Out Today</strong> sits on the right.</p>
+            </div>
+          </div>
+          <div class="col-md-6 col-xl-4">
+            <div class="card h-100 p-4 border-0 shadow-sm">
+              <div class="fw-bold text-primary mb-2"><i class="bi bi-5-circle-fill me-2"></i>Ask a question</div>
+              <p class="small text-muted mb-0">Open <strong>Ask AI</strong> and type things like <em>"Who took the most leaves?"</em> or <em>"Who is on leave on Jan 31?"</em>.</p>
+            </div>
+          </div>
+          <div class="col-md-6 col-xl-4">
+            <div class="card h-100 p-4 border-0 shadow-sm">
+              <div class="fw-bold text-primary mb-2"><i class="bi bi-box-arrow-right me-2"></i>Sign out when done</div>
+              <p class="small text-muted mb-0">On a shared computer, use the sign-out button (top right). Sessions also end by themselves after about 6 hours.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="row g-3 mb-4">
           <div class="col-lg-7">
-            <div class="card border-0 shadow-sm p-4 h-100 bg-white" style="border-radius: 16px;">
-              <h5 class="fw-bold mb-4"><i class="bi bi-info-circle text-primary me-2"></i>How to use (For Employees)</h5>
-              <div class="d-flex gap-3 mb-4">
-                <div class="bg-primary-subtle text-primary rounded-circle d-flex align-items-center justify-content-center fw-bold step-circle">1</div>
-                <div>
-                  <h6 class="fw-bold mb-1">Secure Sign In</h6>
-                  <p class="text-muted small mb-0">Click the <strong>Sign in</strong> button in the top right. Select your name from the dropdown and enter your 4-6 digit PIN. If it's your first time, you'll be prompted to create one.</p>
-                </div>
-              </div>
-              <div class="d-flex gap-3 mb-4">
-                <div class="bg-primary-subtle text-primary rounded-circle d-flex align-items-center justify-content-center fw-bold step-circle">2</div>
-                <div>
-                  <h6 class="fw-bold mb-1">Apply for Leave</h6>
-                  <p class="text-muted small mb-0">Click the blue <strong>Apply Leave</strong> button. Choose your dates and leave type. You can also click directly on a date in the Team Calendar to pre-fill the form.</p>
-                </div>
-              </div>
-              <div class="d-flex gap-3">
-                <div class="bg-primary-subtle text-primary rounded-circle d-flex align-items-center justify-content-center fw-bold step-circle">3</div>
-                <div>
-                  <h6 class="fw-bold mb-1">Track Approvals</h6>
-                  <p class="text-muted small mb-0">Go to the <strong>My Leave</strong> tab to see your balance. Once your manager reviews your request, a private "Manager Note" will appear next to the status.</p>
-                </div>
+            <div class="card border-0 shadow-sm h-100">
+              <div class="card-header bg-white fw-bold">Leave types</div>
+              <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                  <tbody>
+                    <tr><td><span class="badge bg-annual">Annual</span></td><td class="small text-muted">Paid time off. <strong>Counts against your yearly balance</strong> once approved.</td></tr>
+                    <tr><td><span class="badge bg-sick">Sick</span></td><td class="small text-muted">Illness or medical appointments.</td></tr>
+                    <tr><td><span class="badge bg-casual">Casual</span></td><td class="small text-muted">Short, unplanned personal time.</td></tr>
+                    <tr><td><span class="badge bg-wfh">WFH</span></td><td class="small text-muted">Working remotely. Shows on the calendar so the team knows.</td></tr>
+                    <tr><td><span class="badge bg-unpaid">Unpaid</span></td><td class="small text-muted">Leave without pay.</td></tr>
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
-
-          <!-- About Me -->
           <div class="col-lg-5">
-            <div class="card border-0 shadow-sm p-4 h-100 bg-white text-center d-flex flex-column justify-content-center align-items-center" style="border-radius: 16px;">
-              <div class="text-white rounded-circle d-flex justify-content-center align-items-center mb-3 shadow" style="width: 80px; height: 80px; font-size: 2rem; font-weight: bold; background: linear-gradient(135deg, #2563eb, #06b6d4);">
-                S
-              </div>
-              <h5 class="fw-bold mb-1">Sai Surya Varakala</h5>
-<p class="text-primary fw-semibold small mb-3">SAFe Scrum Master at TCS | AI Techno Agilist</p>
-<p class="text-muted small mb-4">
-  "I'm a SAFe Scrum Master at TCS and an AI Techno Agilist. I built Symplyve to solve the headache of tracking team availability. What started as a simple Google Sheet evolved into this elite, serverless dashboard. I love building tools that make teams more efficient."
-</p>
-<div class="d-flex justify-content-center gap-3 flex-wrap">
-  <a href="https://github.com/suryasticsai" target="_blank" class="text-muted fs-4 hover-primary" title="GitHub"><i class="bi bi-github"></i></a>
-  <a href="https://Linkedin.com/In/suryasticsai" target="_blank" class="text-muted fs-4 hover-primary" title="LinkedIn"><i class="bi bi-linkedin"></i></a>
-  <a href="https://huggingface.co/Spaces/Suryasticsai" target="_blank" class="text-muted fs-4 hover-primary" title="Hugging Face"><i class="bi bi-robot"></i></a>
-  <a href="https://instagram.com/suryasticsai" target="_blank" class="text-muted fs-4 hover-primary" title="Instagram"><i class="bi bi-instagram"></i></a>
-  <a href="mailto:suryasticsai@gmail.com" class="text-muted fs-4 hover-primary" title="Email"><i class="bi bi-envelope-fill"></i></a>
-</div>
+            <div class="card border-0 shadow-sm h-100 p-4">
+              <div class="fw-bold mb-2"><i class="bi bi-lightbulb text-warning me-2"></i>Good to know</div>
+              <ul class="small text-muted mb-0 ps-3">
+                <li class="mb-2">You cannot request dates that overlap another pending or approved request.</li>
+                <li class="mb-2">Annual requests larger than your remaining balance are refused.</li>
+                <li class="mb-2">Your reason and manager notes are visible only to you and the admin.</li>
+                <li class="mb-0"><strong>Forgot your PIN?</strong> Ask the admin to reset it. You will then be asked to create a new one.</li>
+              </ul>
             </div>
           </div>
+        </div>
+
+        <div class="card border-0 shadow-sm p-4">
+          <div class="fw-bold mb-2"><i class="bi bi-shield-check text-primary me-2"></i>For admins</div>
+          <ol class="small text-muted mb-0 ps-3">
+            <li class="mb-1">Choose <strong>Admin</strong> in the sign-in box and enter the admin PIN.</li>
+            <li class="mb-1">Open <strong>Approvals</strong> and click <strong>Review</strong> on a request. Add an optional note.</li>
+            <li class="mb-1"><strong>Reject</strong> takes effect immediately. <strong>Approve</strong> asks for a 6-digit code emailed to the admin address, so a stolen session cannot approve leave.</li>
+            <li class="mb-0">Use <strong>Reports</strong> for a searchable list of every request.</li>
+          </ol>
+        </div>
+      </div>
+
+      <!-- VIEW: ABOUT THE AUTHOR -->
+      <div v-show="activeTab === 'about'">
+        <div class="card border-0 shadow-sm overflow-hidden mb-4">
+          <div style="height: 110px; background: linear-gradient(135deg, #2563eb, #06b6d4);"></div>
+          <div class="p-4 pt-0 text-center">
+            <div class="bg-white text-primary rounded-circle d-inline-flex justify-content-center align-items-center shadow"
+                 style="width: 96px; height: 96px; font-size: 2.2rem; font-weight: 700; margin-top: -48px; font-family: 'Outfit';">SV</div>
+            <h2 class="fw-bold mt-3 mb-1" style="font-family: 'Outfit';">Surya <span class="text-muted fw-normal fs-5">(Sai Varakala)</span></h2>
+            <p class="text-primary fw-semibold mb-3">SAFe Scrum Master · Techno-Agilist</p>
+
+            <p class="text-muted mx-auto mb-4" style="max-width: 640px;">
+              I build tools that make teams' lives easier. After 6+ years across QA, full-stack and Java backend work, I moved into Agile delivery, and I still like to write the code that solves the problems I see on real teams.
+              Symplyve started as one of those: a simple, honest way to see who is out and keep approvals moving.
+            </p>
+
+            <div class="d-flex flex-wrap justify-content-center align-items-center gap-2 mb-4 small">
+              <span class="badge rounded-pill bg-light text-dark border px-3 py-2">QA Engineer</span>
+              <i class="bi bi-arrow-right text-muted"></i>
+              <span class="badge rounded-pill bg-light text-dark border px-3 py-2">Full Stack Developer</span>
+              <i class="bi bi-arrow-right text-muted"></i>
+              <span class="badge rounded-pill bg-light text-dark border px-3 py-2">Java Backend Developer</span>
+              <i class="bi bi-arrow-right text-muted"></i>
+              <span class="badge rounded-pill bg-primary px-3 py-2">Scrum Master</span>
+            </div>
+
+            <div class="d-flex flex-wrap justify-content-center gap-2 mb-4">
+              <span class="badge bg-success-subtle text-success px-3 py-2"><i class="bi bi-patch-check me-1"></i>PSM II · Scrum.org</span>
+              <span class="badge bg-success-subtle text-success px-3 py-2"><i class="bi bi-patch-check me-1"></i>SAFe Scrum Master</span>
+            </div>
+
+            <div class="d-flex flex-wrap justify-content-center gap-2">
+              <a class="btn btn-primary rounded-pill px-4" href="https://www.linkedin.com/in/suryasticsai" target="_blank" rel="noopener"><i class="bi bi-linkedin me-2"></i>LinkedIn</a>
+              <a class="btn btn-dark rounded-pill px-4" href="https://github.com/suryasticsai" target="_blank" rel="noopener"><i class="bi bi-github me-2"></i>GitHub</a>
+              <a class="btn btn-outline-secondary rounded-pill px-4" href="https://suryasticsai.medium.com" target="_blank" rel="noopener"><i class="bi bi-journal-text me-2"></i>Medium</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="card border-0 shadow-sm p-4 text-center">
+          <div class="fw-bold" style="font-family: 'Outfit'; font-size: 1.25rem;">SuprinceTalks</div>
+          <div class="text-muted fst-italic">A Scrum Master's Daily Tale</div>
         </div>
       </div>
 
@@ -228,6 +356,7 @@
           <div class="card-header bg-white d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
             <h5 class="m-0 text-primary"><i class="bi bi-person-badge me-2"></i>My Leave Dashboard</h5>
 
+            <!-- Admin can look at anyone -->
             <div class="d-flex align-items-center gap-2" v-if="isAdmin">
               <label class="fw-semibold small text-muted mb-0">Viewing:</label>
               <select class="form-select form-select-sm fw-bold" v-model="targetEmployeeId" @change="updateURL()" style="width: auto; min-width: 200px;">
@@ -238,6 +367,7 @@
           </div>
 
           <div class="row g-0" v-if="targetEmployee">
+            <!-- Left: info + balances -->
             <div class="col-md-4 border-end p-4 text-center">
               <div class="stat-icon blue mx-auto mb-3" style="width:64px;height:64px;font-size:2rem;"><i class="bi bi-person-badge-fill"></i></div>
               <h4 class="fw-bold mb-1">{{ targetEmployee.name }}</h4>
@@ -260,6 +390,7 @@
               <p class="text-muted small mt-3 mb-0">Annual leave, {{ new Date().getFullYear() }}</p>
             </div>
 
+            <!-- Right: history -->
             <div class="col-md-8 p-4 bg-light" style="border-radius: 0 0 16px 0;">
               <h6 class="fw-bold mb-3">Leave History</h6>
               <div class="table-responsive">
@@ -327,8 +458,10 @@
             </div>
           </div>
 
+          <!-- FullCalendar -->
           <div v-show="currentView === 'calendar'" style="min-height: 600px; padding: 1rem;" id="calendar" ref="calendarEl"></div>
 
+          <!-- Gantt timeline -->
           <div v-show="currentView === 'timeline'" class="timeline-scroll-area">
             <div class="grid-header" :style="{ gridTemplateColumns: `220px repeat(${days.length}, minmax(40px, 1fr))` }">
               <div class="col-emp">EMPLOYEE</div>
@@ -358,6 +491,7 @@
           </div>
         </div>
 
+        <!-- Side panels -->
         <div class="side-panel">
           <div class="card">
             <div class="card-header"><h5>Leave Balance</h5></div>
@@ -476,13 +610,13 @@
   <footer class="footer mt-auto py-3 bg-white border-top">
     <div class="container-fluid px-4 d-flex flex-column flex-md-row justify-content-between align-items-center text-muted small">
       <div class="d-flex align-items-center gap-2 mb-2 mb-md-0">
-        <img src="symplyve-logo1.png" alt="Symplyve" style="max-height: 36px; width: auto; object-fit: contain;" onerror="this.style.display='none'">
+        <i class="bi bi-hexagon-fill text-primary"></i>
         <span>Symplyve &copy; 2026. Built for elite teams.</span>
       </div>
       <div class="d-flex gap-3">
-        <a href="#" class="text-decoration-none text-muted">Privacy</a>
-        <a href="#" class="text-decoration-none text-muted">Terms</a>
-        <a href="#" class="text-decoration-none text-muted">Support</a>
+        <a href="#" class="text-decoration-none text-muted" @click.prevent="activeTab = 'howto'; scrollTo(0, 0)">How to use</a>
+        <a href="#" class="text-decoration-none text-muted" @click.prevent="activeTab = 'about'; scrollTo(0, 0)">About the author</a>
+        <a href="https://github.com/suryasticsai/symplyve" class="text-decoration-none text-muted" target="_blank" rel="noopener">GitHub</a>
       </div>
     </div>
   </footer>
@@ -695,24 +829,6 @@
     </div>
   </div>
 
-  <!-- 6. Logout Confirmation Modal (NEW) -->
-  <div class="modal fade" id="logoutConfirmModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered modal-sm">
-      <div class="modal-content border-0 shadow-lg text-center" style="border-radius: 16px;">
-        <div class="modal-body p-4">
-          <i class="bi bi-box-arrow-right text-danger mb-3" style="font-size: 3rem;"></i>
-          <h5 class="fw-bold mb-2">Sign Out?</h5>
-          <p class="text-muted small mb-4">Are you sure you want to sign out? You will need your PIN to view your private leave details again.</p>
-          
-          <div class="d-grid gap-2">
-            <button class="btn btn-danger fw-bold" @click="logout">Yes, sign out</button>
-            <button class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- TOASTS & NOTIFICATIONS -->
   <div class="toast-container" id="toastContainer">
     <div v-for="toast in toasts" :key="toast.id" class="custom-toast" :class="toast.type">
@@ -741,7 +857,7 @@
     </div>
   </div>
 
-  <!-- DEBUG CONSOLE -->
+  <!-- DEBUG CONSOLE (open the page with ?debug) -->
   <div class="debug-console" :class="{ 'open': showDebug }" v-if="debugEnabled">
     <div class="debug-header">
       <div class="d-flex align-items-center gap-2">
@@ -770,13 +886,14 @@
 <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 
-<script src="js/config.js?v=5"></script>
-<script src="js/api.js?v=5"></script>
-<script src="js/notifications.js?v=5"></script>
-<script src="js/auth.js?v=5"></script>
-<script src="js/calendar.js?v=5"></script>
-<script src="js/leave.js?v=5"></script>
-<script src="js/app.js?v=5"></script>
+<script src="js/config.js?v=6"></script>
+<script src="js/api.js?v=6"></script>
+<script src="js/notifications.js?v=6"></script>
+<script src="js/auth.js?v=6"></script>
+<script src="js/calendar.js?v=6"></script>
+<script src="js/leave.js?v=6"></script>
+<script src="js/insights.js?v=6"></script>
+<script src="js/app.js?v=6"></script>
 
 </body>
 </html>
