@@ -1,0 +1,327 @@
+/*
+ * Ask the leave table.
+ *
+ * Questions are answered in two layers:
+ *   1. Exact answers calculated in the browser from the leave table
+ *      (who took the most leave, who is off on a date, one person's totals...).
+ *      Language models are unreliable at counting, so anything that is arithmetic is done here.
+ *   2. Everything else goes to the RAGina endpoint with a compact copy of the table.
+ *
+ * Only what the signed-in person can already see is used: names, leave type,
+ * dates, status. Reasons and manager notes are never sent.
+ */
+
+const ASK_MONTHS = {
+    january: 1, jan: 1, february: 2, feb: 2, march: 3, mar: 3, april: 4, apr: 4, may: 5,
+    june: 6, jun: 6, july: 7, jul: 7, august: 8, aug: 8, september: 9, sept: 9, sep: 9,
+    october: 10, oct: 10, november: 11, nov: 11, december: 12, dec: 12
+};
+const ASK_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const ASK_MON = '(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)';
+const ASK_RE = {
+    iso: /\b(\d{4})-(\d{2})-(\d{2})\b/,
+    slash: /\b(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})\b/,
+    mdy: new RegExp('\\b' + ASK_MON + '\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(\\d{4}))?\\b'),
+    dmy: new RegExp('\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?' + ASK_MON + '\\b\\.?(?:,?\\s+(\\d{4}))?'),
+    monthOnly: new RegExp('\\b(?:in|of|during|for|on)\\s+' + ASK_MON + '\\b(?:\\s+(\\d{4}))?')
+};
+
+const insightsModule = {
+    data() {
+        return {
+            askQuestion: '',
+            askBusy: false,
+            askHistory: [],
+            askExamples: [
+                'Who took the most leaves?',
+                'Who is on leave today?',
+                'Who took leave on Jan 31?',
+                'Who has pending requests?',
+                'How many sick days were taken this year?'
+            ]
+        };
+    },
+    methods: {
+        useExample(q) { this.askQuestion = q; this.askSubmit(); },
+
+        async askSubmit() {
+            const q = this.askQuestion.trim();
+            if (!q || this.askBusy) return;
+            this.askBusy = true;
+            this.askQuestion = '';
+            this.askHistory.unshift({ id: Date.now() + Math.random(), q, a: '', table: null, source: '', error: false, pending: true });
+            const entry = this.askHistory[0];                    // the reactive copy
+            if (this.askHistory.length > 20) this.askHistory.pop();
+
+            try {
+                const local = this.answerLocally(q);
+                if (local) {
+                    Object.assign(entry, local, { source: 'table' });
+                } else {
+                    Object.assign(entry, await this.answerWithAI(q), { source: 'ai' });
+                }
+            } catch (e) {
+                entry.a = e.message || 'Something went wrong. Please try again.';
+                entry.error = true;
+            } finally {
+                entry.pending = false;
+                this.askBusy = false;
+            }
+        },
+
+        /* ----------------------------- date helpers ----------------------------- */
+        askFmt(iso) { return `${Number(iso.slice(8, 10))} ${ASK_MONTH_NAMES[Number(iso.slice(5, 7)) - 1]} ${iso.slice(0, 4)}`; },
+
+        askValid(y, m, d) {
+            const t = new Date(Date.UTC(y, m - 1, d));
+            if (t.getUTCFullYear() !== y || t.getUTCMonth() !== m - 1 || t.getUTCDate() !== d) return null;
+            return `${y}-${dateUtil.pad(m)}-${dateUtil.pad(d)}`;
+        },
+
+        askMonthRange(y, m) {
+            const last = new Date(y, m, 0).getDate();
+            return { start: `${y}-${dateUtil.pad(m)}-01`, end: `${y}-${dateUtil.pad(m)}-${dateUtil.pad(last)}` };
+        },
+
+        /** Finds the period a question is about. Returns { start, end, label, assumedYear } or null. */
+        askRange(text) {
+            const today = dateUtil.todayISO();
+            const thisYear = Number(today.slice(0, 4));
+            let m, iso, assumed = false;
+
+            if ((m = ASK_RE.iso.exec(text))) iso = this.askValid(+m[1], +m[2], +m[3]);
+            else if ((m = ASK_RE.slash.exec(text))) iso = this.askValid(+m[3], +m[2], +m[1]);          // dd/mm/yyyy
+            else if ((m = ASK_RE.mdy.exec(text))) {
+                const y = m[3] ? +m[3] : (assumed = true, thisYear);
+                iso = this.askValid(y, ASK_MONTHS[m[1]], +m[2]);
+            } else if ((m = ASK_RE.dmy.exec(text))) {
+                const y = m[3] ? +m[3] : (assumed = true, thisYear);
+                iso = this.askValid(y, ASK_MONTHS[m[2]], +m[1]);
+            }
+            if (iso) return { start: iso, end: iso, label: this.askFmt(iso), assumedYear: assumed ? iso.slice(0, 4) : '' };
+
+            if (/\btoday\b/.test(text)) return { start: today, end: today, label: 'today (' + this.askFmt(today) + ')' };
+            if (/\btomorrow\b/.test(text)) { const d = dateUtil.addDays(today, 1); return { start: d, end: d, label: 'tomorrow (' + this.askFmt(d) + ')' }; }
+            if (/\byesterday\b/.test(text)) { const d = dateUtil.addDays(today, -1); return { start: d, end: d, label: 'yesterday (' + this.askFmt(d) + ')' }; }
+
+            if (/\bthis week\b/.test(text) || /\bnext week\b/.test(text) || /\blast week\b/.test(text)) {
+                const shift = /next week/.test(text) ? 7 : /last week/.test(text) ? -7 : 0;
+                const dow = new Date(dateUtil.toUTC(today)).getUTCDay();
+                const start = dateUtil.addDays(today, -((dow + 6) % 7) + shift);
+                const end = dateUtil.addDays(start, 6);
+                return { start, end, label: `${this.askFmt(start)} to ${this.askFmt(end)}` };
+            }
+
+            const cur = Number(today.slice(5, 7));
+            const rel = /\bthis month\b/.test(text) ? 0 : /\bnext month\b/.test(text) ? 1 : /\blast month\b/.test(text) ? -1 : null;
+            if (rel !== null) {
+                const t = new Date(thisYear, cur - 1 + rel, 1);
+                const r = this.askMonthRange(t.getFullYear(), t.getMonth() + 1);
+                return { ...r, label: `${['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][t.getMonth()]} ${t.getFullYear()}` };
+            }
+
+            if ((m = ASK_RE.monthOnly.exec(text))) {
+                const y = m[2] ? +m[2] : (assumed = true, thisYear);
+                const r = this.askMonthRange(y, ASK_MONTHS[m[1]]);
+                return { ...r, label: `${ASK_MONTH_NAMES[ASK_MONTHS[m[1]] - 1]} ${y}`, assumedYear: assumed ? String(y) : '' };
+            }
+
+            if (/\bthis year\b/.test(text)) return { start: `${thisYear}-01-01`, end: `${thisYear}-12-31`, label: String(thisYear) };
+            if (/\blast year\b/.test(text)) return { start: `${thisYear - 1}-01-01`, end: `${thisYear - 1}-12-31`, label: String(thisYear - 1) };
+            if ((m = /\b(20\d{2})\b/.exec(text))) return { start: `${m[1]}-01-01`, end: `${m[1]}-12-31`, label: m[1] };
+            return null;
+        },
+
+        /** ' on 31 Jan 2026', ' in March 2026', ' today (25 Nov 2026)' */
+        askWhen(r) {
+            if (!r) return '';
+            if (/^(today|tomorrow|yesterday)/.test(r.label)) return ' ' + r.label;
+            return (r.start === r.end ? ' on ' : ' in ') + r.label;
+        },
+
+        askOverlap(l, r) {
+            if (!r) return l.days;
+            const s = l.startDate > r.start ? l.startDate : r.start;
+            const e = l.endDate < r.end ? l.endDate : r.end;
+            return e < s ? 0 : dateUtil.days(s, e);
+        },
+
+        /* ------------------------- exact answers from the table ------------------------- */
+        answerLocally(question) {
+            const text = question.toLowerCase().replace(/[?!]+$/g, '').trim();
+            const wants = re => re.test(text);
+
+            // Which statuses count. Default: approved leave only.
+            let statuses = ['Approved'], explicit = false;
+            if (wants(/\bincluding pending\b|\bpending and approved\b|\bapproved and pending\b|\bwith pending\b|\ball requests\b|\bevery request\b/)) { statuses = ['Approved', 'Pending']; explicit = true; }
+            else if (wants(/\bpending\b|\bawaiting\b|\bwaiting for approval\b/)) { statuses = ['Pending']; explicit = true; }
+            else if (wants(/\brejected\b|\bdeclined\b/)) { statuses = ['Rejected']; explicit = true; }
+            const statusWord = statuses.length === 2 ? 'approved or pending' : statuses[0].toLowerCase();
+
+            // Leave type filter
+            let typeKey = '';
+            if (wants(/\bsick\b/)) typeKey = 'sick';
+            else if (wants(/\bannual\b|\bvacation\b|\bearned\b/)) typeKey = 'annual';
+            else if (wants(/\bcasual\b/)) typeKey = 'casual';
+            else if (wants(/\bwfh\b|work from home|\bremote\b/)) typeKey = 'wfh';
+            else if (wants(/\bunpaid\b/)) typeKey = 'unpaid';
+            const typeWord = typeKey ? ` ${LEAVE_TYPES[typeKey].label.toLowerCase()}` : '';
+
+            const range = this.askRange(text);
+            const pool = this.leaves.filter(l =>
+                statuses.includes(l.status) && (!typeKey || l.typeKey === typeKey) && this.askOverlap(l, range) > 0);
+            const when = this.askWhen(range);
+            const assumed = range && range.assumedYear ? ` (I assumed ${range.assumedYear} because no year was given.)` : '';
+
+            // Is the question about one named person?
+            const full = this.employees.filter(e => text.includes(e.name.toLowerCase()));
+            let people = full;
+            if (!people.length) {
+                people = this.employees.filter(e => {
+                    const first = e.name.split(' ')[0].toLowerCase();
+                    return first.length > 2 && new RegExp('\\b' + first.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(text);
+                });
+            }
+            if (people.length > 1 && !full.length) {
+                return { a: `More than one person matches: ${people.map(p => p.name).join(', ')}. Please use the full name.`, table: null };
+            }
+            const person = people.length === 1 ? people[0] : (full.length === 1 ? full[0] : null);
+
+            // 1) Who took the most / least leave
+            const asc = wants(/\b(least|fewest|lowest|minimum|less)\b/);
+            if (!person && wants(/\bwho\b/) && wants(/\b(most|more|highest|maximum|max|top|longest|least|fewest|lowest|minimum|less)\b/) &&
+                wants(/leave|days|\boff\b|absent|holiday|time off|wfh/)) {
+                const totals = this.employees.map(e => {
+                    const mine = pool.filter(l => l.empId === e.id);
+                    return { name: e.name, days: mine.reduce((s, l) => s + this.askOverlap(l, range), 0), requests: mine.length };
+                });
+                const sorted = [...totals].sort((a, b) => asc ? a.days - b.days : b.days - a.days);
+                if (!sorted.length) return { a: 'There are no employees in the table yet.', table: null };
+                const best = sorted[0].days;
+                const leaders = sorted.filter(t => t.days === best);
+                let a;
+                if (!asc && best === 0) {
+                    a = `Nobody has taken${typeWord} leave${when} (${statusWord}).`;
+                } else {
+                    const names = leaders.length > 5 ? leaders.slice(0, 5).map(t => t.name).join(', ') + ` and ${leaders.length - 5} more` : leaders.map(t => t.name).join(' and ');
+                    a = asc
+                        ? (best === 0 ? `${leaders.length} ${leaders.length === 1 ? 'person has' : 'people have'} taken no${typeWord} leave${when} (${statusWord}): ${names}.`
+                            : `${names} took the least${typeWord} leave${when}: ${best} day(s) (${statusWord}).`)
+                        : `${names} ${leaders.length > 1 ? 'are tied for the most' : 'took the most'}${typeWord} leave${when}: ${best} day(s) (${statusWord}).`;
+                }
+                return {
+                    a: a + assumed,
+                    table: { cols: ['Employee', 'Days', 'Requests'], rows: sorted.slice(0, 10).map(t => [t.name, t.days, t.requests]) }
+                };
+            }
+
+            // 2) One person's summary
+            if (person && wants(/how many|total|count|days|taken|take|took|used|balance|left|remaining|leave|leaves|history|summary|holiday|off/)) {
+                const mine = pool.filter(l => l.empId === person.id).sort((a, b) => (a.startDate < b.startDate ? -1 : 1));
+                const days = mine.reduce((s, l) => s + this.askOverlap(l, range), 0);
+                if (!mine.length) return { a: `${person.name} has no ${statusWord}${typeWord} leave${when}.${assumed}`, table: null };
+                const byType = {};
+                mine.forEach(l => { byType[l.label] = (byType[l.label] || 0) + this.askOverlap(l, range); });
+                let a = `${person.name} has ${days} ${statusWord}${typeWord} day(s) of leave${when} across ${mine.length} request(s): ` +
+                    Object.keys(byType).map(k => `${k} ${byType[k]}`).join(', ') + '.';
+                const thisYear = String(new Date().getFullYear());
+                if (!typeKey && (!range || (range.start.slice(0, 4) === thisYear && range.end.slice(0, 4) === thisYear && range.start.slice(5) === '01-01'))) {
+                    a += ` Annual leave left this year: ${this.allowanceOf(person) - this.calculateUsed(person)} of ${this.allowanceOf(person)}.`;
+                }
+                return {
+                    a: a + assumed,
+                    table: { cols: ['Type', 'Dates', 'Days', 'Status'], rows: mine.slice(0, 50).map(l => [l.label, `${l.startDate} to ${l.endDate}`, this.askOverlap(l, range), l.status]) }
+                };
+            }
+
+            // 3) Who is on leave in a period / who has pending requests / who took a type of leave
+            if (!person && (range || explicit || typeKey) &&
+                wants(/\bwho\b|\bwhich\b|anyone|anybody|everyone|\blist\b|\bshow\b|how many|\bcount\b|\bout\b|\boff\b|on leave|absent/)) {
+                const items = [...pool].sort((a, b) => (a.startDate < b.startDate ? -1 : 1));
+                const names = [...new Set(items.map(l => l.emp))];
+                if (!items.length) return { a: `Nobody has ${statusWord}${typeWord} leave${when || ' recorded'}.${assumed}`, table: null };
+
+                let a;
+                if (range && range.start === range.end) {
+                    a = `${names.length} ${names.length === 1 ? 'person has' : 'people have'} ${statusWord}${typeWord} leave${when}: ` +
+                        names.map(n => { const l = items.find(x => x.emp === n); return `${n} (${l.label})`; }).join(', ') + '.';
+                } else {
+                    a = `${names.length} ${names.length === 1 ? 'person has' : 'people have'} ${statusWord}${typeWord} leave${when}: ${names.join(', ')}.`;
+                }
+                if (items.length > 50) a += ' Showing the first 50 records.';
+                return {
+                    a: a + assumed,
+                    table: { cols: ['Employee', 'Type', 'Dates', 'Days', 'Status'], rows: items.slice(0, 50).map(l => [l.emp, l.label, `${l.startDate} to ${l.endDate}`, this.askOverlap(l, range), l.status]) }
+                };
+            }
+
+            return null;   // not something the table can answer exactly: hand over to the AI
+        },
+
+        /* ------------------------------ AI for everything else ------------------------------ */
+        askContext() {
+            const rows = this.leaves
+                .filter(l => l.status !== 'Rejected')
+                .sort((a, b) => (a.startDate < b.startDate ? -1 : 1))
+                .slice(-400)
+                .map(l => [l.emp, l.label, l.startDate, l.endDate, l.days, l.status].join(','));
+            const totals = this.employees.map(e => {
+                const days = this.leaves.filter(l => l.empId === e.id && l.status === 'Approved').reduce((s, l) => s + l.days, 0);
+                return `${e.name}: ${days}`;
+            });
+            return [
+                `Today: ${dateUtil.todayISO()}`,
+                'Leave records (CSV columns: Employee,Type,Start,End,Days,Status):',
+                ...rows,
+                'Total approved leave days per employee:',
+                ...totals
+            ].join('\n');
+        },
+
+        async answerWithAI(question) {
+            const url = (typeof CONFIG !== 'undefined' && CONFIG.AI_URL) || 'https://ragina-crawler-ragina.vercel.app/api/ask';
+            const context = this.askContext();
+            const prompt =
+                'You answer questions about a team\'s leave records. Use ONLY the data below. ' +
+                'Count carefully, quote dates, and say "I can\'t tell from the data" if the answer is not in it. Keep the answer short.\n\n' +
+                'DATA:\n' + context + '\n\nQUESTION: ' + question;
+
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 40000);
+            let res;
+            try {
+                res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question: prompt, context })
+                });
+            } catch (e) {
+                if (e.name === 'AbortError') throw new Error('The AI took too long to answer. Please try again.');
+                throw new Error('Could not reach the AI service. Check your connection, or that the service allows this website (CORS).');
+            } finally {
+                clearTimeout(timer);
+            }
+
+            let body = await res.text();
+            let data = body;
+            try { data = JSON.parse(body); } catch (e) { /* plain text answer */ }
+            if (!res.ok) {
+                throw new Error((data && (data.error || data.message)) || `The AI service returned an error (${res.status}).`);
+            }
+
+            const pick = d => {
+                if (d == null) return '';
+                if (typeof d === 'string') return d;
+                const direct = d.answer ?? d.response ?? d.text ?? d.message ?? d.result ?? d.output;
+                if (typeof direct === 'string') return direct;
+                if (direct && typeof direct === 'object') return pick(direct);
+                if (d.data) return pick(d.data);
+                if (d.choices && d.choices[0]) return (d.choices[0].message && d.choices[0].message.content) || d.choices[0].text || '';
+                return '';
+            };
+            const answer = String(pick(data)).trim();
+            if (!answer) throw new Error('The AI service replied in a format this page does not recognise.');
+            return { a: answer, table: null };
+        }
+    }
+};
